@@ -1,0 +1,16 @@
+wandb
+wandb/
+data
+data/
+checkpoints/
+model/__pycache__/
+utils/__pycache__/
+*.pyc
+.vscode
+*.pkl
+*.pkl.json
+*.log.json
+*.pth
+*.pt
+.vscode/
+__pycache__
