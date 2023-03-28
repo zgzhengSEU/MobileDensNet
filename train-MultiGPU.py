@@ -41,6 +41,7 @@ def parse_args():
     # 不要改该参数，系统会自动分配
     parser.add_argument('--device', default='cuda')
     # 开启的进程数(注意不是线程),不用设置该参数，会根据nproc_per_node自动设置
+    parser.add_argument('--syncBN', type=bool, default=True)
     parser.add_argument('--world-size', default=4, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist-url', default='env://',
@@ -55,9 +56,9 @@ def main(args):
     init_distributed_mode(args=args)
     # ===================== DataPath =========================
     # datatype = 'ShanghaiTech_part_A'
-    datatype = 'ShanghaiTech_part_B'
+    # datatype = 'ShanghaiTech_part_B'
     # datatype = 'VisDrone2020-CC'
-    # datatype = 'VisDrone'
+    datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
         train_image_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/images'
         train_dmap_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/ground-truth'
@@ -82,7 +83,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='MobileDensNet'
+    wandb_name='GhostNetV2P3_justdila_fpn'
     # ===================== configuration ======================
     rank = args.rank
     args.lr *= args.world_size  # 学习率要根据并行GPU的数量进行倍增
@@ -143,7 +144,7 @@ def main(args):
     train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler,num_workers=train_num_workers)
     test_loader = DataLoader(test_dataset, sampler=test_sampler, num_workers=test_num_workers, batch_size=1, shuffle=False)
     # ========================================= model =================================================
-    model = GhostNetV2P3_justdila_fpn(mode='large').to(device)
+    model = GhostNetV2P3_justdila_fpn(width=1.6).to(device)
     if args.syncBN:
         # 使用SyncBatchNorm后训练会更耗时
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)

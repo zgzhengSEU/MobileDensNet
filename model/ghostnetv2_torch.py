@@ -14,8 +14,6 @@ import torch.nn.functional as F
 import math
 import os
 
-from timm.models.registry import register_model
-
 
 def _make_divisible(v, divisor, min_value=None):
     """
@@ -340,7 +338,7 @@ class GhostNetV2(nn.Module):
         return x
 
 
-@register_model
+
 def ghostnetv2(**kwargs):
     cfgs = [
         # k, t, c, SE, s
