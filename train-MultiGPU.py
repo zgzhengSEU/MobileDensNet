@@ -74,10 +74,10 @@ def main(args):
         test_image_root = 'data/VisDrone2020-CC/test/images'
         test_dmap_root = 'data/VisDrone2020-CC/test/ground_truth'
     elif datatype == 'VisDrone':
-        train_image_root = 'data/VisDrone/images/train'
-        train_dmap_root = 'data/GDNetData/train/dens'
-        test_image_root = 'data/VisDrone/images/val'
-        test_dmap_root = 'data/GDNetData/val/dens'
+        train_image_root = 'data/DensVisDrone/images/train'
+        train_dmap_root = 'data/DensVisDrone/density/dens_train'
+        test_image_root = 'data/DensVisDrone/images/val'
+        test_dmap_root = 'data/DensVisDrone/density/dens_val'
     # ===================== wandb =============================
     wandb_project="Density"
     wandb_group=datatype
