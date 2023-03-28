@@ -4,7 +4,7 @@ import os
 from tqdm import tqdm as tqdm
 import time
 
-from model.mobilenetV3 import MobileNetV3DensNew_dila
+from model.ghostnetv2_torch import GhostNetV2P3_justdila_fpn
 from model.CrowdDataset import CrowdDataset
 from utils.distributed_utils import init_distributed_mode, dist
 from utils.train_eval_utils import train_one_epoch, evaluate
@@ -21,9 +21,10 @@ from collections import OrderedDict
 import math
 
 """
-    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29600 --use_env train.py   
-    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env train.py   
-    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -m torch.distributed.launch --nproc_per_node=6 --use_env train.py
+    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29600 --use_env train-MultiGPU.py   
+    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env train-MultiGPU.py 
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 --use_env train-MultiGPU.py  
+    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -m torch.distributed.launch --nproc_per_node=6 --use_env train-MultiGPU.py
 """
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -142,7 +143,7 @@ def main(args):
     train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler,num_workers=train_num_workers)
     test_loader = DataLoader(test_dataset, sampler=test_sampler, num_workers=test_num_workers, batch_size=1, shuffle=False)
     # ========================================= model =================================================
-    model = MobileNetV3DensNew_dila(mode='large').to(device)
+    model = GhostNetV2P3_justdila_fpn(mode='large').to(device)
     if args.syncBN:
         # 使用SyncBatchNorm后训练会更耗时
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
