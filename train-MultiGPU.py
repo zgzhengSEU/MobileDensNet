@@ -227,8 +227,8 @@ def main(args):
         )
         # eval and log
         if rank == 0:
-            mean_mae = mae_sum / len(test_loader)
-            mean_mse = math.sqrt(mse_sum / len(test_loader))
+            mean_mae = mae_sum / test_sampler.total_size
+            mean_mse = math.sqrt(mse_sum / test_sampler.total_size)
             # checkpoints
             if os.path.exists(f'./checkpoints/{wandb_name}_epoch_{epoch - 1}.pth.tar') is True:
                 os.remove(f'./checkpoints/{wandb_name}_epoch_{epoch - 1}.pth.tar')
