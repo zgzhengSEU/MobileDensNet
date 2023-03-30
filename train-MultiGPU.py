@@ -4,7 +4,7 @@ import os
 from tqdm import tqdm as tqdm
 import time
 
-from model.mobilenetV3 import MobileNetV3DensNew_dila
+from model.ghostnetv2_torch import GhostNetV2P3_justdila_fpn
 from model.CrowdDataset import CrowdDataset
 from utils.distributed_utils import init_distributed_mode, dist
 from utils.train_eval_utils import train_one_epoch, evaluate
@@ -21,9 +21,10 @@ from collections import OrderedDict
 import math
 
 """
-    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29600 --use_env train.py   
-    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env train.py   
-    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -m torch.distributed.launch --nproc_per_node=6 --use_env train.py
+    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29600 --use_env train-MultiGPU.py   
+    CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env train-MultiGPU.py 
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 --use_env train-MultiGPU.py  
+    CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -m torch.distributed.launch --nproc_per_node=6 --use_env train-MultiGPU.py
 """
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -40,6 +41,7 @@ def parse_args():
     # 不要改该参数，系统会自动分配
     parser.add_argument('--device', default='cuda')
     # 开启的进程数(注意不是线程),不用设置该参数，会根据nproc_per_node自动设置
+    parser.add_argument('--syncBN', type=bool, default=True)
     parser.add_argument('--world-size', default=4, type=int,
                         help='number of distributed processes')
     parser.add_argument('--dist-url', default='env://',
@@ -54,9 +56,9 @@ def main(args):
     init_distributed_mode(args=args)
     # ===================== DataPath =========================
     # datatype = 'ShanghaiTech_part_A'
-    datatype = 'ShanghaiTech_part_B'
+    # datatype = 'ShanghaiTech_part_B'
     # datatype = 'VisDrone2020-CC'
-    # datatype = 'VisDrone'
+    datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
         train_image_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/images'
         train_dmap_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/ground-truth'
@@ -81,7 +83,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='MobileDensNet'
+    wandb_name='GhostNetV2P3_justdila_fpn'
     # ===================== configuration ======================
     rank = args.rank
     args.lr *= args.world_size  # 学习率要根据并行GPU的数量进行倍增
@@ -142,7 +144,7 @@ def main(args):
     train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler,num_workers=train_num_workers)
     test_loader = DataLoader(test_dataset, sampler=test_sampler, num_workers=test_num_workers, batch_size=1, shuffle=False)
     # ========================================= model =================================================
-    model = MobileNetV3DensNew_dila(mode='large').to(device)
+    model = GhostNetV2P3_justdila_fpn(width=1.6).to(device)
     if args.syncBN:
         # 使用SyncBatchNorm后训练会更耗时
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
@@ -225,8 +227,8 @@ def main(args):
         )
         # eval and log
         if rank == 0:
-            mean_mae = mae_sum / len(test_loader)
-            mean_mse = math.sqrt(mse_sum / len(test_loader))
+            mean_mae = mae_sum / test_sampler.total_size
+            mean_mse = math.sqrt(mse_sum / test_sampler.total_size)
             # checkpoints
             if os.path.exists(f'./checkpoints/{wandb_name}_{datatype}_epoch_{epoch - 1}.pth.tar') is True:
                 os.remove(f'./checkpoints/{wandb_name}_{datatype}_epoch_{epoch - 1}.pth.tar')
