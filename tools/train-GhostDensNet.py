@@ -4,12 +4,6 @@ import os
 from tqdm import tqdm as tqdm
 import time
 
-from model.ghostnetv2_torch import GhostNetV2P3_justdila_fpn_p2loc
-from model.mobilenetV3 import MobileNetV3DensNew_dila
-from model.CrowdDataset import CrowdDataset_p2
-from model.CrowdDataset import CrowdDataset
-from utils.train_eval_utils import train_one_epoch_single_gpu_p2loc, evaluate_single_gpu_p2loc
-
 import argparse
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
@@ -17,6 +11,14 @@ import pytorch_warmup as warmup
 import wandb
 from collections import OrderedDict
 import math
+
+print(f'[work_dis: ]{os.getcwd()}')
+import sys
+sys.path.append('.')
+from model import GhostNetV2P3_justdila
+from model import CrowdDataset
+from utils import train_one_epoch_single_gpu, evaluate_single_gpu
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -37,8 +39,8 @@ def main(args):
     if torch.cuda.is_available() is False:
         raise EnvironmentError("not find GPU device for training.")
     # ===================== DataPath =========================
-    datatype = 'ShanghaiTech_part_A'
-    # datatype = 'ShanghaiTech_part_B'
+    # datatype = 'ShanghaiTech_part_A'
+    datatype = 'ShanghaiTech_part_B'
     # datatype = 'VisDrone2020-CC'
     # datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
@@ -65,7 +67,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='GhostDensNet_fpn'
+    wandb_name='GhostDensNet'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"
@@ -115,12 +117,12 @@ def main(args):
     device = torch.device(gpu_or_cpu)
     torch.cuda.manual_seed(seed)
     # ======================== dataloader =================================================================
-    train_dataset = CrowdDataset_p2(train_image_root, train_dmap_root, gt_downsample=8, phase='train')
+    train_dataset = CrowdDataset(train_image_root, train_dmap_root, gt_downsample=8, phase='train')
     test_dataset = CrowdDataset(test_image_root, test_dmap_root, gt_downsample=8, phase='test')
     train_loader=torch.utils.data.DataLoader(train_dataset,batch_size=1,shuffle=True, num_workers=train_num_workers)
     test_loader=torch.utils.data.DataLoader(test_dataset,batch_size=1,shuffle=False, num_workers=test_num_workers)
     # ========================================= model =================================================
-    model = GhostNetV2P3_justdila_fpn_p2loc(width=1.6).to(device)
+    model = GhostNetV2P3_justdila(width=1.6).to(device)
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
         start_epoch = resume_load_checkpoint['epoch']
@@ -157,7 +159,7 @@ def main(args):
     min_epoch = 0
     for epoch in range(start_epoch, epochs):
         # training phase
-        mean_loss = train_one_epoch_single_gpu_p2loc(
+        mean_loss = train_one_epoch_single_gpu(
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
@@ -167,7 +169,7 @@ def main(args):
             warmup_scheduler=warmup_scheduler
         )
         # testing phase
-        mae_sum, mse_sum = evaluate_single_gpu_p2loc(
+        mae_sum, mse_sum = evaluate_single_gpu(
             model=model,
             test_loader=test_loader,
             device=device,

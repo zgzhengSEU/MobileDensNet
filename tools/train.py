@@ -3,12 +3,6 @@ import torch
 import os
 from tqdm import tqdm as tqdm
 import time
-
-from model.ghostnetv2_torch import GhostNetV2P3_justdila_fpn
-from model.mobilenetV3 import MobileNetV3DensNew_dila
-from model.CrowdDataset import CrowdDataset
-from utils.train_eval_utils import train_one_epoch_single_gpu, evaluate_single_gpu
-
 import argparse
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
@@ -16,6 +10,13 @@ import pytorch_warmup as warmup
 import wandb
 from collections import OrderedDict
 import math
+
+print(f'[work_dis: ]{os.getcwd()}')
+import sys
+sys.path.append('.')
+from model import GhostNetV2P3_justdila_fpn_p2loc
+from model import CrowdDataset, CrowdDataset_p2
+from utils import train_one_epoch_single_gpu_p2loc, evaluate_single_gpu_p2loc
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -25,10 +26,13 @@ def parse_args():
     parser.add_argument('--show_images', type=bool, default=True)
     parser.add_argument('--resume', type=bool, default=False)
     parser.add_argument('--resume_id', type=str, default='5tpdfo8k')
-    parser.add_argument('--resume_checkpoint', type=str, default='')
-    parser.add_argument('--init_checkpoint', type=str, default='checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar')
+    parser.add_argument('--resume_checkpoint', type=str, default='',
+                        help='resume checkpoint path')
+    parser.add_argument('--init_checkpoint', type=str, default='checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar',
+                        help='initial weights path')
     # 不要改该参数，系统会自动分配
-    parser.add_argument('--device', default='cuda')
+    parser.add_argument('--device', default='cuda',
+                        help='device id (i.e. 0 or 0,1 or cpu)')
     args = parser.parse_args()
     return args
 
@@ -38,8 +42,8 @@ def main(args):
     # ===================== DataPath =========================
     # datatype = 'ShanghaiTech_part_A'
     # datatype = 'ShanghaiTech_part_B'
-    datatype = 'VisDrone2020-CC'
-    # datatype = 'VisDrone'
+    # datatype = 'VisDrone2020-CC'
+    datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
         train_image_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/images'
         train_dmap_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/ground-truth'
@@ -64,7 +68,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='GhostDensNet_fpn'
+    wandb_name='GhostNetV2P3_justdila_fpn_p2loc'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"
@@ -108,18 +112,18 @@ def main(args):
                 project=wandb_project,
                 group=wandb_group,
                 mode=wandb_mode,
-                name=wandb_name)
-
+                name=wandb_name,
+                settings=wandb.Settings(code_dir="."))
     # ======================== cuda ===================================================================
     device = torch.device(gpu_or_cpu)
     torch.cuda.manual_seed(seed)
     # ======================== dataloader =================================================================
-    train_dataset = CrowdDataset(train_image_root, train_dmap_root, gt_downsample=8, phase='train')
+    train_dataset = CrowdDataset_p2(train_image_root, train_dmap_root, gt_downsample=8, phase='train')
     test_dataset = CrowdDataset(test_image_root, test_dmap_root, gt_downsample=8, phase='test')
     train_loader=torch.utils.data.DataLoader(train_dataset,batch_size=1,shuffle=True, num_workers=train_num_workers)
     test_loader=torch.utils.data.DataLoader(test_dataset,batch_size=1,shuffle=False, num_workers=test_num_workers)
     # ========================================= model =================================================
-    model = GhostNetV2P3_justdila_fpn(width=1.6).to(device)
+    model = GhostNetV2P3_justdila_fpn_p2loc(width=1.6).to(device)
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
         start_epoch = resume_load_checkpoint['epoch']
@@ -156,7 +160,7 @@ def main(args):
     min_epoch = 0
     for epoch in range(start_epoch, epochs):
         # training phase
-        mean_loss = train_one_epoch_single_gpu(
+        mean_loss = train_one_epoch_single_gpu_p2loc(
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
@@ -166,7 +170,7 @@ def main(args):
             warmup_scheduler=warmup_scheduler
         )
         # testing phase
-        mae_sum, mse_sum = evaluate_single_gpu(
+        mae_sum, mse_sum = evaluate_single_gpu_p2loc(
             model=model,
             test_loader=test_loader,
             device=device,

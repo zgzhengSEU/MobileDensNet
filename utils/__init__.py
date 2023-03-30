@@ -1,4 +1,2 @@
-from .distributed_utils import *
-from .train_eval_utils import *
-
-__all__ = []
+from utils.train_eval_utils import *
+from utils.distributed_utils import *
