@@ -178,8 +178,8 @@ def main(args):
         mean_mae = mae_sum / len(test_loader)
         mean_mse = math.sqrt(mse_sum / len(test_loader))
         # checkpoints
-        if os.path.exists(f'./checkpoints/{wandb_name}_epoch_{epoch - 1}.pth.tar') is True:
-            os.remove(f'./checkpoints/{wandb_name}_epoch_{epoch - 1}.pth.tar')
+        if os.path.exists(f'./checkpoints/{wandb_name}_{datatype}_epoch_{epoch - 1}.pth.tar') is True:
+            os.remove(f'./checkpoints/{wandb_name}_{datatype}_epoch_{epoch - 1}.pth.tar')
 
         checkpoint_dict = {
             'epoch': epoch,
@@ -187,13 +187,13 @@ def main(args):
             'optim_state_dict': optimizer.state_dict(),
             'scheduler': scheduler.state_dict(),
             'warmup_scheduler': warmup_scheduler.state_dict()}
-        torch.save(checkpoint_dict, f'./checkpoints/{wandb_name}_epoch_{epoch}.pth.tar')
+        torch.save(checkpoint_dict, f'./checkpoints/{wandb_name}_{datatype}_epoch_{epoch}.pth.tar')
 
         if mean_mae < min_mae:
             min_mae = mean_mae
             min_epoch = epoch
-            torch.save(checkpoint_dict,
-                        f'./checkpoints/{wandb_name}_best_epoch_{epoch}.pth.tar')
+            torch.save(checkpoint_dict['model_state_dict'],
+                        f'./checkpoints/{wandb_name}_{datatype}_best_epoch_{epoch}.pth')
         
         if mean_mse < min_mse:
             min_mse = mean_mse

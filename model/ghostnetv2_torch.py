@@ -1347,15 +1347,123 @@ class GhostNetV2P3_justdila_fpn(nn.Module):
         # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
         return out
 
+class GhostNetV2P3_justdila_fpn_p2loc(nn.Module):
+    def __init__(self, kernel_size=1, use_dilation=False, width=1.0, block=GhostBottleneckV2, args=None):
+        super(GhostNetV2P3_justdila_fpn_p2loc, self).__init__()
+        self.cfgs = [
+            # k, t, c, SE, s
+            # ====== p1 ==============
+            # stage 0
+            [[3,  16,  16, 0, 1]],  # 0
+            # ====== p2 ==============
+            # stage 1
+            [[3,  48,  24, 0, 2]],
+            # stage 2
+            [[3,  72,  24, 0, 1]],  # 2
+            # ====== p3 ==============
+            # stage 3
+            [[5,  72,  40, 0.25, 2]],
+            # stage 4
+            [[5, 120,  40, 0.25, 1]],  # 4
+            # ====== p4 ==============
+            # stage 5
+            [[3, 240,  80, 0, 1]],
+            # stage 6
+            [[3, 200,  80, 0, 1],
+             [3, 184,  80, 0, 1],
+             [3, 184,  80, 0, 1],
+             [3, 480, 112, 0.25, 1],
+             [3, 672, 112, 0.25, 1]],  # 6
+            # ====== p5 ==============
+            # stage 7
+            [[5, 672, 160, 0.25, 2]],
+            # stage 8
+            [[5, 960, 160, 0, 1],
+             [5, 960, 160, 0.25, 1],
+             [5, 960, 160, 0, 1],
+             [5, 960, 160, 0.25, 1]]]  # 8
+
+        # building first layer
+        output_channel = _make_divisible(16 * width, 4)
+        self.conv_stem = nn.Conv2d(3, output_channel, 3, 2, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(output_channel)
+        self.act1 = nn.ReLU(inplace=True)
+        input_channel = output_channel
+
+        # building inverted residual blocks
+        stages = []
+        #block = block
+        layer_id = 0
+        for cfg in self.cfgs:
+            layers = []
+            for k, exp_size, c, se_ratio, s in cfg:
+                output_channel = _make_divisible(c * width, 4)
+                hidden_channel = _make_divisible(exp_size * width, 4)
+                if block == GhostBottleneckV2:
+                    layers.append(block(input_channel, hidden_channel, output_channel, k, s,
+                                  se_ratio=se_ratio, layer_id=layer_id, args=args))
+                input_channel = output_channel
+                layer_id += 1
+            stages.append(nn.Sequential(*layers))
+
+        self.blocks = nn.Sequential(*stages)
+
+        self.backend_feat_p2 = [24, 24, 24]
+        self.backend_feat_p2 = [_make_divisible(c * width, 4) for c in self.backend_feat_p2]    
+        self.backend_feat_p3 = [120, 120, 120]
+        self.backend_feat_p3 = [_make_divisible(c * width, 4) for c in self.backend_feat_p3]    
+        self.backend_feat_p4 = [40, 40, 40]
+        self.backend_feat_p4 = [_make_divisible(c * width, 4) for c in self.backend_feat_p4]
+        self.backend_feat_out = [160, 160, 80, 40]
+        self.backend_feat_out = [_make_divisible(c * width, 4) for c in self.backend_feat_out]   
+        self.backend_p2 = make_backend_layers(self.backend_feat_p2, in_channels=_make_divisible(24 * width, 4), dilation=True) 
+        self.backend_p3 = make_backend_layers(self.backend_feat_p3, in_channels=_make_divisible(112 * width, 4), dilation=True)
+        self.backend_p4 = make_backend_layers(self.backend_feat_p4, in_channels=_make_divisible(160 * width, 4), dilation=True)
+        self.backend_out = make_backend_layers(self.backend_feat_out, in_channels=_make_divisible(160 * width, 4), dilation=True)
+        # building last layer
+        self.bottomUP_p3_to_p2 = BottomUPBlock_Cat(
+            in_channels=_make_divisible(40 * width, 4), mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=kernel_size, use_dilation=use_dilation)
+        self.bottomUP_p4_to_p3 = BottomUPBlock_Cat(
+            in_channels=_make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(40 * width, 4), kernel_size=kernel_size, use_dilation=use_dilation)
+        self.output_layer = nn.Conv2d(_make_divisible(40 * width, 4), 1, kernel_size=1)
+        self.fuse_p2 = nn.Conv2d(2 * _make_divisible(24 * width, 4), 1, kernel_size=1)
+        
+    def forward(self, x):
+        h, w = x.shape[2:4]
+        h //= 8
+        w //= 8
+
+        x = self.conv_stem(x)
+        x = self.bn1(x)
+        x = self.act1(x)
+        feat = []
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            if i in [2, 6, 8]:
+                feat.append(x)
+        p2 = self.backend_p2(feat[0])
+        p3 = self.backend_p3(feat[1])
+        p4 = self.bottomUP_p4_to_p3(self.backend_p4(feat[2]))
+        p4 = F.interpolate(p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
+        
+        p3_out = self.backend_out(torch.cat([p3, p4], dim=1))
+        p2_out = self.bottomUP_p3_to_p2(p3_out)
+        p2_out = F.interpolate(p2_out, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
+        p2_out = self.fuse_p2(torch.cat([p2, p2_out], dim=1))
+        p3_out = self.output_layer(p3_out)
+        
+        # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
+        return p3_out, p2_out
 
 if __name__ == '__main__':
-    model = GhostNetV2P3_justdila_fpn(kernel_size=1, use_dilation=False, width=1.6).to('cuda')
+    model = GhostNetV2P3_justdila_fpn_p2loc(kernel_size=1, use_dilation=False, width=1.6).to('cuda')
     # checkpoint_path = '/home/gp.sc.cc.tohoku.ac.jp/duanct/openmmlab/GhostDensNet/checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar'
     # load_checkpoint(model, checkpoint_path, strict=False, map_location='cuda')
     model.eval()
     input_img = torch.ones((1, 3, 1920, 1080)).to('cuda')
-    out = model(input_img)
-    print(out.shape)
+    p3_out, p2_out = model(input_img)
+    print(p3_out.shape)
+    print(p2_out.shape)
     # print(model)
     showstat = True
     if showstat:

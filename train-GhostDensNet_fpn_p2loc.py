@@ -4,9 +4,11 @@ import os
 from tqdm import tqdm as tqdm
 import time
 
+from model.ghostnetv2_torch import GhostNetV2P3_justdila_fpn_p2loc
 from model.mobilenetV3 import MobileNetV3DensNew_dila
+from model.CrowdDataset import CrowdDataset_p2
 from model.CrowdDataset import CrowdDataset
-from utils.train_eval_utils import train_one_epoch_single_gpu, evaluate_single_gpu
+from utils.train_eval_utils import train_one_epoch_single_gpu_p2loc, evaluate_single_gpu_p2loc
 
 import argparse
 import torch.optim as optim
@@ -24,13 +26,10 @@ def parse_args():
     parser.add_argument('--show_images', type=bool, default=True)
     parser.add_argument('--resume', type=bool, default=False)
     parser.add_argument('--resume_id', type=str, default='5tpdfo8k')
-    parser.add_argument('--resume_checkpoint', type=str, default='',
-                        help='resume checkpoint path')
-    parser.add_argument('--init_checkpoint', type=str, default='checkpoints/MobileNetV3/mobilenetv3-large-1cd25616.pth',
-                        help='initial weights path')
+    parser.add_argument('--resume_checkpoint', type=str, default='')
+    parser.add_argument('--init_checkpoint', type=str, default='checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar')
     # 不要改该参数，系统会自动分配
-    parser.add_argument('--device', default='cuda',
-                        help='device id (i.e. 0 or 0,1 or cpu)')
+    parser.add_argument('--device', default='cuda')
     args = parser.parse_args()
     return args
 
@@ -38,8 +37,8 @@ def main(args):
     if torch.cuda.is_available() is False:
         raise EnvironmentError("not find GPU device for training.")
     # ===================== DataPath =========================
-    # datatype = 'ShanghaiTech_part_A'
-    datatype = 'ShanghaiTech_part_B'
+    datatype = 'ShanghaiTech_part_A'
+    # datatype = 'ShanghaiTech_part_B'
     # datatype = 'VisDrone2020-CC'
     # datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
@@ -66,7 +65,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='MobileDensNet'
+    wandb_name='GhostDensNet_fpn'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"
@@ -116,12 +115,12 @@ def main(args):
     device = torch.device(gpu_or_cpu)
     torch.cuda.manual_seed(seed)
     # ======================== dataloader =================================================================
-    train_dataset = CrowdDataset(train_image_root, train_dmap_root, gt_downsample=8, phase='train')
+    train_dataset = CrowdDataset_p2(train_image_root, train_dmap_root, gt_downsample=8, phase='train')
     test_dataset = CrowdDataset(test_image_root, test_dmap_root, gt_downsample=8, phase='test')
     train_loader=torch.utils.data.DataLoader(train_dataset,batch_size=1,shuffle=True, num_workers=train_num_workers)
     test_loader=torch.utils.data.DataLoader(test_dataset,batch_size=1,shuffle=False, num_workers=test_num_workers)
     # ========================================= model =================================================
-    model = MobileNetV3DensNew_dila(mode='large').to(device)
+    model = GhostNetV2P3_justdila_fpn_p2loc(width=1.6).to(device)
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
         start_epoch = resume_load_checkpoint['epoch']
@@ -158,7 +157,7 @@ def main(args):
     min_epoch = 0
     for epoch in range(start_epoch, epochs):
         # training phase
-        mean_loss = train_one_epoch_single_gpu(
+        mean_loss = train_one_epoch_single_gpu_p2loc(
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
@@ -168,7 +167,7 @@ def main(args):
             warmup_scheduler=warmup_scheduler
         )
         # testing phase
-        mae_sum, mse_sum = evaluate_single_gpu(
+        mae_sum, mse_sum = evaluate_single_gpu_p2loc(
             model=model,
             test_loader=test_loader,
             device=device,
@@ -194,8 +193,8 @@ def main(args):
         if mean_mae < min_mae:
             min_mae = mean_mae
             min_epoch = epoch
-            torch.save(checkpoint_dict,
-                        f'./checkpoints/{wandb_name}_{datatype}_best_epoch_{epoch}.pth.tar')
+            torch.save(checkpoint_dict['model_state_dict'],
+                        f'./checkpoints/{wandb_name}_{datatype}_best_epoch_{epoch}.pth')
         
         if mean_mse < min_mse:
             min_mse = mean_mse
