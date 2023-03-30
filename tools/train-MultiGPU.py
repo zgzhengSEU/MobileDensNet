@@ -17,7 +17,7 @@ from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import BatchSampler
 from torch.utils.data import DataLoader
 
-print(f'[work_dis: ]{os.getcwd()}')
+print(f'[work_dis: {os.getcwd()}]')
 import sys
 sys.path.append('.')
 

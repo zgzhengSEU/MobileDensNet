@@ -11,7 +11,7 @@ import wandb
 from collections import OrderedDict
 import math
 
-print(f'[work_dis: ]{os.getcwd()}')
+print(f'[work_dis: {os.getcwd()}]')
 import sys
 sys.path.append('.')
 from model import GhostNetV2P3_justdila_fpn_p2loc
