@@ -28,7 +28,7 @@ from utils import train_one_epoch_p2, evaluate_p2
 
 
 """
-    CUDA_VISIBLE_DEVICES=0 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29600 --use_env tools/train-MultiGPU.py   
+    CUDA_VISIBLE_DEVICES=1 python -m torch.distributed.launch --nproc_per_node=1 --master_port=29600 --use_env tools/train-MultiGPU.py   
     CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch --nproc_per_node=2 --use_env tools/train-MultiGPU.py 
     CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --nproc_per_node=4 --use_env tools/train-MultiGPU.py  
     CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 python -m torch.distributed.launch --nproc_per_node=6 --use_env tools/train-MultiGPU.py
@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument('--resume_id', type=str, default='5tpdfo8k')
     parser.add_argument('--resume_checkpoint', type=str, default='',
                         help='resume checkpoint path')
-    parser.add_argument('--init_checkpoint', type=str, default='checkpoints/MobileNetV3/mobilenetv3-large-1cd25616.pth',
+    parser.add_argument('--init_checkpoint', type=str, default='checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar',
                         help='initial weights path')
     # 不要改该参数，系统会自动分配
     parser.add_argument('--device', default='cuda')
@@ -64,8 +64,8 @@ def main(args):
     # ===================== DataPath =========================
     # datatype = 'ShanghaiTech_part_A'
     # datatype = 'ShanghaiTech_part_B'
-    # datatype = 'VisDrone2020-CC'
-    datatype = 'VisDrone'
+    datatype = 'VisDrone2020-CC'
+    # datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
         train_image_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/images'
         train_dmap_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/ground-truth'
@@ -90,7 +90,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='GhostNetV2P3_justdila_fpn'
+    wandb_name='GhostNetV2P3_justdila_fpn_p2loc'
     # ===================== configuration ======================
     rank = args.rank
     args.lr *= args.world_size  # 学习率要根据并行GPU的数量进行倍增
@@ -139,7 +139,7 @@ def main(args):
                     mode=wandb_mode,
                     name=wandb_name,
                     settings=wandb.Settings(code_dir="."))
-
+    
     # ======================== cuda ===================================================================
     device = torch.device(gpu_or_cpu)
     torch.cuda.manual_seed(seed)
@@ -153,13 +153,7 @@ def main(args):
     test_loader = DataLoader(test_dataset, sampler=test_sampler, num_workers=test_num_workers, batch_size=1, shuffle=False)
     # ========================================= model =================================================
     model = GhostNetV2P3_justdila_fpn_p2loc(width=1.6).to(device)
-    if args.syncBN:
-        # 使用SyncBatchNorm后训练会更耗时
-        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
-        
-    # 转为DDP模型
-    model = torch.nn.parallel.DistributedDataParallel(
-        model, device_ids=[args.gpu])
+
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
         start_epoch = resume_load_checkpoint['epoch']
@@ -180,11 +174,13 @@ def main(args):
     elif os.path.exists(init_checkpoint):
         # weights_dict = torch.load(init_checkpoint, map_location=device)
         # model.load_state_dict(weights_dict, strict=False)
-        load_checkpoint(model, init_checkpoint, strict=False, map_location=device)
+        incompatible_keys = load_checkpoint(model, init_checkpoint, strict=False, map_location=device)
+        incompatible_keys = [key for key in incompatible_keys[0] if 'total' not in key]
         # load_checkpoint = torch.load(init_checkpoint)
         # model.load_state_dict(load_checkpoint['model'].state_dict(), strict=False)
         if rank == 0:
             print(f'[rank {rank} load checkpoint from {init_checkpoint}]')
+            print(f'incompatible_keys:\n {incompatible_keys}')
 
     else:
         temp_init_checkpoint_path = os.path.join(
@@ -199,7 +195,12 @@ def main(args):
         model.load_state_dict(torch.load(
             temp_init_checkpoint_path, map_location=device))
         
-
+    if args.syncBN:
+        # 使用SyncBatchNorm后训练会更耗时
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
+        
+    # 转为DDP模型
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
     # ===================================== optimizer ===========================================
     if not resume:
         pg = [p for p in model.parameters() if p.requires_grad]
