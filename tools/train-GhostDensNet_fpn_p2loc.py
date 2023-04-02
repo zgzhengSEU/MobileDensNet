@@ -111,7 +111,8 @@ def main(args):
                 project=wandb_project,
                 group=wandb_group,
                 mode=wandb_mode,
-                name=wandb_name)
+                name=wandb_name,
+                settings=wandb.Settings(code_dir="."))
 
     # ======================== cuda ===================================================================
     device = torch.device(gpu_or_cpu)

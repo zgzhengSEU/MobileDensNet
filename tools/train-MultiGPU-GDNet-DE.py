@@ -21,7 +21,7 @@ print(f'[work_dis: {os.getcwd()}]')
 import sys
 sys.path.append('.')
 
-from model import GhostNetV2P3_DilatedEncoder
+from model import GhostNetV2P3_DilatedEncoder as USE_MODEL
 from model import CrowdDataset, CrowdDataset_p2
 from utils import init_distributed_mode, dist
 from utils import train_one_epoch_p2, evaluate_p2
@@ -90,7 +90,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='GhostNetV2P3_justdila_fpn_p2loc'
+    wandb_name='GhostNetV2P3_DilatedEncoder'
     # ===================== configuration ======================
     rank = args.rank
     args.lr *= args.world_size  # 学习率要根据并行GPU的数量进行倍增
@@ -152,7 +152,7 @@ def main(args):
     train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler,num_workers=train_num_workers)
     test_loader = DataLoader(test_dataset, sampler=test_sampler, num_workers=test_num_workers, batch_size=1, shuffle=False)
     # ========================================= model =================================================
-    model = GhostNetV2P3_DilatedEncoder(width=1.6).to(device)
+    model = USE_MODEL(width=1.6).to(device)
 
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)

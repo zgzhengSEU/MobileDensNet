@@ -1494,9 +1494,6 @@ class Bottleneck(nn.Module):
 
     def forward(self, x):
         identity = x
-        print(f'in_channels: {self.in_channels}')
-        print(f'mid_channels: {self.mid_channels}')
-        print(f'x.shape: {x.shape}')
         out = self.conv1(x)
         out = self.conv2(out)
         out = self.conv3(out)
@@ -1549,7 +1546,6 @@ class DilatedEncoder(nn.Module):
                 constant_init(m, 1)
 
     def forward(self, x):
-        print(f'DE.in : {self.in_channels}')
         return self.dilated_encoder_blocks(x)
 
 class FEM(nn.Module):
@@ -1668,7 +1664,8 @@ class GhostNetV2P3_DilatedEncoder(nn.Module):
 
 
         self.P2_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        self.P3_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(112 * width, 4), out_channels=_make_divisible(112 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+        self.P3_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(112 * width, 4), out_channels=_make_divisible(112 * width, 4), block_mid_channels=_make_divisible(80 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+        self.P3_DilatedEncoder_out = DilatedEncoder(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(80 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
         self.P4_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(160 * width, 4), out_channels=_make_divisible(160 * width, 4), block_mid_channels=_make_divisible(80 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
         # building last layer
         self.P2_FEM = FEM(
@@ -1693,7 +1690,6 @@ class GhostNetV2P3_DilatedEncoder(nn.Module):
             if i in [2, 6, 8]:
                 feat.append(x)
         p2 = self.P2_DilatedEncoder(feat[0])
-        print(f'feat[1]: {feat[1].shape}')
         p3 = self.P3_DilatedEncoder(feat[1])
         p4 = self.P4_DilatedEncoder(feat[2])
         
@@ -1701,9 +1697,11 @@ class GhostNetV2P3_DilatedEncoder(nn.Module):
         p4_up = F.interpolate(p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
         
         p3 = self.P3_FEM(torch.cat([p3, p4_up], dim=1))
-        p3_up = F.interpolate(p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
         
+        p3_up = F.interpolate(p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
         p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
+        
+        p3 = self.P3_DilatedEncoder_out(p3)
         
         p2_out = self.output_layer_p2(p2)
         p3_out = self.output_layer_p3(p3)
@@ -1714,18 +1712,255 @@ class GhostNetV2P3_DilatedEncoder(nn.Module):
 
 
 
+class BasicConv(nn.Module):
+
+    def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0, dilation=1, groups=1, relu=True, bn=True, bias=False):
+        super(BasicConv, self).__init__()
+        self.out_channels = out_planes
+        self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups=groups, bias=bias)
+        self.bn = nn.BatchNorm2d(out_planes,eps=1e-5, momentum=0.01, affine=True) if bn else None
+        self.relu = nn.ReLU(inplace=True) if relu else None
+
+    def forward(self, x):
+        x = self.conv(x)
+        if self.bn is not None:
+            x = self.bn(x)
+        if self.relu is not None:
+            x = self.relu(x)
+        return x
+
+class BasicSepConv(nn.Module):
+
+    def __init__(self, in_planes, kernel_size, stride=1, padding=0, dilation=1, groups=1, relu=True, bn=True, bias=False):
+        super(BasicSepConv, self).__init__()
+        self.out_channels = in_planes
+        self.conv = nn.Conv2d(in_planes, in_planes, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, groups = in_planes, bias=bias)
+        self.bn = nn.BatchNorm2d(in_planes,eps=1e-5, momentum=0.01, affine=True) if bn else None
+        self.relu = nn.ReLU(inplace=True) if relu else None
+
+    def forward(self, x):
+        x = self.conv(x)
+        if self.bn is not None:
+            x = self.bn(x)
+        if self.relu is not None:
+            x = self.relu(x)
+        return x
+
+class BasicRFB(nn.Module):
+
+    def __init__(self, in_planes, out_planes, stride=1, scale = 0.1):
+        super(BasicRFB, self).__init__()
+        self.scale = scale
+        self.out_channels = out_planes
+        self.inter_planes = in_planes // 8
+        self.branch1 = nn.Sequential(
+                BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+                BasicConv(self.inter_planes, (self.inter_planes//2)*3, kernel_size=(1,3), stride=1, padding=(0,1)),
+                BasicConv((self.inter_planes//2)*3, (self.inter_planes//2)*3, kernel_size=(3,1), stride=stride, padding=(1,0)),
+                BasicSepConv((self.inter_planes//2)*3, kernel_size=3, stride=1, padding=3, dilation=3, relu=False)
+                )
+        self.branch2 = nn.Sequential(
+                BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+                BasicConv(self.inter_planes, (self.inter_planes//2)*3, kernel_size=3, stride=1, padding=1),
+                BasicConv((self.inter_planes//2)*3, (self.inter_planes//2)*3, kernel_size=3, stride=stride, padding=1),
+                BasicSepConv((self.inter_planes//2)*3, kernel_size=3, stride=1, padding=5, dilation=5, relu=False)
+                )
+
+        self.ConvLinear = BasicConv(3*self.inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
+        if in_planes == out_planes:
+            self.identity = True
+        else:
+            self.identity = False
+            self.shortcut = BasicConv(in_planes, out_planes, kernel_size=1, stride=stride, relu=False)
+        self.relu = nn.ReLU(inplace=False)
+
+    def forward(self,x):
+        x1 = self.branch1(x)
+        x2 = self.branch2(x)
+
+        out = torch.cat((x1,x2),1)
+        out = self.ConvLinear(out)
+        if self.identity:
+            out = out*self.scale + x
+        else:
+            short = self.shortcut(x)
+            out = out*self.scale + short
+        out = self.relu(out)
+
+        return out
+
+
+class BasicRFB_a(nn.Module):
+
+    def __init__(self, in_planes, out_planes, stride=1, scale = 0.1):
+        super(BasicRFB_a, self).__init__()
+        self.scale = scale
+        self.out_channels = out_planes
+        self.inter_planes = in_planes // 4
+
+
+        self.branch0 = nn.Sequential(
+                BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+                BasicSepConv(self.inter_planes, kernel_size=3, stride=1, padding=1, dilation=1, relu=False)
+                )
+        self.branch1 = nn.Sequential(
+                BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+                BasicConv(self.inter_planes, self.inter_planes, kernel_size=(3,1), stride=1, padding=(1,0)),
+                BasicSepConv(self.inter_planes, kernel_size=3, stride=1, padding=3, dilation=3, relu=False)
+                )
+        self.branch2 = nn.Sequential(
+                BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+                BasicConv(self.inter_planes, self.inter_planes, kernel_size=(1,3), stride=stride, padding=(0,1)),
+                BasicSepConv(self.inter_planes, kernel_size=3, stride=1, padding=3, dilation=3, relu=False)
+                )
+        self.branch3 = nn.Sequential(
+                BasicConv(in_planes, self.inter_planes//2, kernel_size=1, stride=1),
+                BasicConv(self.inter_planes//2, (self.inter_planes//4)*3, kernel_size=(1,3), stride=1, padding=(0,1)),
+                BasicConv((self.inter_planes//4)*3, self.inter_planes, kernel_size=(3,1), stride=stride, padding=(1,0)),
+                BasicSepConv(self.inter_planes, kernel_size=3, stride=1, padding=5, dilation=5, relu=False)
+                )
+
+        self.ConvLinear = BasicConv(4*self.inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
+        self.relu = nn.ReLU(inplace=False)
+
+    def forward(self,x):
+        x0 = self.branch0(x)
+        x1 = self.branch1(x)
+        x2 = self.branch2(x)
+        x3 = self.branch3(x)
+
+        out = torch.cat((x0,x1,x2,x3),1)
+        out = self.ConvLinear(out)
+        out = out*self.scale + x
+        out = self.relu(out)
+
+        return out
+
+
+class GhostNetV2P3_RFB(nn.Module):
+    def __init__(self, FEM_kernel_size=1, use_dilation=False, width=1.0, block=GhostBottleneckV2, args=None):
+        super(GhostNetV2P3_RFB, self).__init__()
+        self.cfgs = [
+            # k, t, c, SE, s
+            # ====== p1 ==============
+            # stage 0
+            [[3,  16,  16, 0, 1]],  # 0
+            # ====== p2 ==============
+            # stage 1
+            [[3,  48,  24, 0, 2]],
+            # stage 2
+            [[3,  72,  24, 0, 1]],  # 2
+            # ====== p3 ==============
+            # stage 3
+            [[5,  72,  40, 0.25, 2]],
+            # stage 4
+            [[5, 120,  40, 0.25, 1]],  # 4
+            # ====== p4 ==============
+            # stage 5
+            [[3, 240,  80, 0, 1]],
+            # stage 6
+            [[3, 200,  80, 0, 1],
+             [3, 184,  80, 0, 1],
+             [3, 184,  80, 0, 1],
+             [3, 480, 112, 0.25, 1],
+             [3, 672, 112, 0.25, 1]],  # 6
+            # ====== p5 ==============
+            # stage 7
+            [[5, 672, 160, 0.25, 2]],
+            # stage 8
+            [[5, 960, 160, 0, 1],
+             [5, 960, 160, 0.25, 1],
+             [5, 960, 160, 0, 1],
+             [5, 960, 160, 0.25, 1]]]  # 8
+
+        # building first layer
+        output_channel = _make_divisible(16 * width, 4)
+        self.conv_stem = nn.Conv2d(3, output_channel, 3, 2, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(output_channel)
+        self.act1 = nn.ReLU(inplace=True)
+        input_channel = output_channel
+
+        # building inverted residual blocks
+        stages = []
+        #block = block
+        layer_id = 0
+        for cfg in self.cfgs:
+            layers = []
+            for k, exp_size, c, se_ratio, s in cfg:
+                output_channel = _make_divisible(c * width, 4)
+                hidden_channel = _make_divisible(exp_size * width, 4)
+                if block == GhostBottleneckV2:
+                    layers.append(block(input_channel, hidden_channel, output_channel, k, s,
+                                  se_ratio=se_ratio, layer_id=layer_id, args=args))
+                input_channel = output_channel
+                layer_id += 1
+            stages.append(nn.Sequential(*layers))
+
+        self.blocks = nn.Sequential(*stages)
+
+
+        self.P2_RFB = BasicRFB_a(in_planes=_make_divisible(24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
+        self.P3_RFB = BasicRFB(in_planes=_make_divisible(112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
+        self.P4_RFB = BasicRFB(in_planes=_make_divisible(160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
+        
+        self.P3_RFB_out = BasicRFB(in_planes=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_planes=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), scale=1.0)
+        # building last layer
+        self.P2_FEM = FEM(
+            in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P3_FEM = FEM(
+            in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P4_FEM = FEM(
+            in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4), out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.output_layer_p3 = nn.Conv2d(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1)
+        self.output_layer_p2 = nn.Conv2d(_make_divisible(24 * width, 4), 1, kernel_size=1)
+    def forward(self, x):
+        h, w = x.shape[2:4]
+        h //= 8
+        w //= 8
+
+        x = self.conv_stem(x)
+        x = self.bn1(x)
+        x = self.act1(x)
+        feat = []
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            if i in [2, 6, 8]:
+                feat.append(x)
+        p2 = self.P2_RFB(feat[0])
+        p3 = self.P3_RFB(feat[1])
+        p4 = self.P4_RFB(feat[2])
+        
+        p4 =self.P4_FEM(p4)
+        p4_up = F.interpolate(p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
+        
+        p3 = self.P3_FEM(torch.cat([p3, p4_up], dim=1))
+        p3_up = F.interpolate(p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
+        
+        p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
+         
+        p2_out = self.output_layer_p2(p2)
+        p3_out = self.output_layer_p3(self.P3_RFB_out(p3))
+        
+        # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
+        return p3_out, p2_out
+
+
+
+
 if __name__ == '__main__':
-    # model = GhostNetV2P3_DilatedEncoder(use_dilation=False, width=1.6).to('cuda')
-    model = GhostNetV2P3_justdila_fpn_p2loc(use_dilation=False, width=1.6).to('cuda')
+    model = GhostNetV2P3_DilatedEncoder(use_dilation=False, width=1.6).to('cuda')
+    # model = GhostNetV2P3_RFB(use_dilation=False, width=1.6).to('cuda')
     # checkpoint_path = '/home/gp.sc.cc.tohoku.ac.jp/duanct/openmmlab/GhostDensNet/checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar'
     # load_checkpoint(model, checkpoint_path, strict=False, map_location='cuda')
     model.eval()
-    input_img = torch.ones((1, 3, 1920, 1080)).to('cuda')
-    p3_out, p2_out = model(input_img)
-    print(p3_out.shape)
-    print(p2_out.shape)
+    input = torch.ones((1, 3, 1920, 1080)).to('cuda')
+    # p3_out, p2_out = model(input)
+    # print(p3_out.shape)
+    # print(p2_out.shape)
     # print(model)
-    showstat = True
-    if showstat:
-        from torchstat import stat
-        stat(model.to('cpu'), (3, 1920, 1080))
+    from fvcore.nn import FlopCountAnalysis
+    from fvcore.nn import flop_count_table
+    from fvcore.nn import flop_count_str
+    flops = FlopCountAnalysis(model, input)
+    print(f'input shape: {input.shape}')
+    print(flop_count_table(flops))
