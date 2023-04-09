@@ -212,10 +212,10 @@ class BasicSepConv(nn.Module):
         return x
 
 
-class BasicRFB_a(nn.Module):
+class RFB(nn.Module):
 
     def __init__(self, in_planes, out_planes, stride=1, scale=0.1):
-        super(BasicRFB_a, self).__init__()
+        super(RFB, self).__init__()
         self.scale = scale
         self.out_channels = out_planes
         self.inter_planes = in_planes // 4
@@ -323,9 +323,7 @@ class FEM(nn.Module):
 
 
 class Bottleneck(nn.Module):
-    """Bottleneck block for DilatedEncoder used in `YOLOF.
-
-    <https://arxiv.org/abs/2103.09460>`.
+    """Bottleneck block for REB
 
     The Bottleneck contains three ConvLayers and one residual connection.
 
@@ -365,9 +363,8 @@ class Bottleneck(nn.Module):
         return out
 
 
-class DilatedEncoder(nn.Module):
-    """Dilated Encoder for YOLOF <https://arxiv.org/abs/2103.09460>`.
-
+class REB(nn.Module):
+    """
     This module contains two types of components:
         - the original FPN lateral convolution layer and fpn convolution layer,
               which are 1x1 conv + 3x3 conv
@@ -383,7 +380,7 @@ class DilatedEncoder(nn.Module):
 
     def __init__(self, in_channels, out_channels, block_mid_channels,
                  num_residual_blocks, block_dilations):
-        super(DilatedEncoder, self).__init__()
+        super(REB, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.block_mid_channels = block_mid_channels
@@ -411,423 +408,6 @@ class DilatedEncoder(nn.Module):
 
     def forward(self, x):
         return self.dilated_encoder_blocks(x)
-
-
-class GhostNetV2P3_RFB_DE(nn.Module):
-    def __init__(self, FEM_kernel_size=1, use_dilation=False, width=1.0, block=GhostBottleneckV2, args=None):
-        super(GhostNetV2P3_RFB_DE, self).__init__()
-        self.cfgs = [
-            # k, t, c, SE, s
-            # ====== p1 ==============
-            # stage 0
-            [[3,  16,  16, 0, 1]],  # 0
-            # ====== p2 ==============
-            # stage 1
-            [[3,  48,  24, 0, 2]],
-            # stage 2
-            [[3,  72,  24, 0, 1]],  # 2
-            # ====== p3 ==============
-            # stage 3
-            [[5,  72,  40, 0.25, 2]],
-            # stage 4
-            [[5, 120,  40, 0.25, 1]],  # 4
-            # ====== p4 ==============
-            # stage 5
-            [[3, 240,  80, 0, 1]],
-            # stage 6
-            [[3, 200,  80, 0, 1],
-             [3, 184,  80, 0, 1],
-             [3, 184,  80, 0, 1],
-             [3, 480, 112, 0.25, 1],
-             [3, 672, 112, 0.25, 1]],  # 6
-            # ====== p5 ==============
-            # stage 7
-            [[5, 672, 160, 0.25, 2]],
-            # stage 8
-            [[5, 960, 160, 0, 1],
-             [5, 960, 160, 0.25, 1],
-             [5, 960, 160, 0, 1],
-             [5, 960, 160, 0.25, 1]]]  # 8
-
-        # building first layer
-        output_channel = _make_divisible(16 * width, 4)
-        self.conv_stem = nn.Conv2d(3, output_channel, 3, 2, 1, bias=False)
-        self.bn1 = nn.BatchNorm2d(output_channel)
-        self.act1 = nn.ReLU(inplace=True)
-        input_channel = output_channel
-
-        # building inverted residual blocks
-        stages = []
-        #block = block
-        layer_id = 0
-        for cfg in self.cfgs:
-            layers = []
-            for k, exp_size, c, se_ratio, s in cfg:
-                output_channel = _make_divisible(c * width, 4)
-                hidden_channel = _make_divisible(exp_size * width, 4)
-                if block == GhostBottleneckV2:
-                    layers.append(block(input_channel, hidden_channel, output_channel, k, s,
-                                  se_ratio=se_ratio, layer_id=layer_id, args=args))
-                input_channel = output_channel
-                layer_id += 1
-            stages.append(nn.Sequential(*layers))
-
-        self.blocks = nn.Sequential(*stages)
-
-        self.P2_RFB = BasicRFB_a(in_planes=_make_divisible(
-            24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
-        self.P3_RFB = BasicRFB_a(in_planes=_make_divisible(
-            112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
-        self.P4_RFB = BasicRFB_a(in_planes=_make_divisible(
-            160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
-        self.P2_DilatedEncoder_out = DilatedEncoder(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
-            24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        self.P3_DilatedEncoder_out = DilatedEncoder(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(
-            112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        # building last layer
-        self.P2_FEM = FEM(in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), in_as_mid=True,
-                          mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.P3_FEM = FEM(in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4),
-                          out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.P4_FEM = FEM(in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4),
-                          out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.output_layer_p3 = nn.Conv2d(_make_divisible(
-            112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1)
-        self.output_layer_p2 = nn.Conv2d(
-            _make_divisible(24 * width, 4), 1, kernel_size=1)
-
-    def forward(self, x):
-        h, w = x.shape[2:4]
-        h //= 8
-        w //= 8
-
-        x = self.conv_stem(x)
-        x = self.bn1(x)
-        x = self.act1(x)
-        feat = []
-        for i, block in enumerate(self.blocks):
-            x = block(x)
-            if i in [2, 6, 8]:
-                feat.append(x)
-        p2 = self.P2_RFB(feat[0])
-        p3 = self.P3_RFB(feat[1])
-        p4 = self.P4_RFB(feat[2])
-
-        p4 = self.P4_FEM(p4)
-        p4_up = F.interpolate(
-            p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
-
-        p3 = self.P3_FEM(torch.cat([p3, p4_up], dim=1))
-        p3_up = F.interpolate(
-            p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
-
-        p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
-
-        p2_out = self.output_layer_p2(self.P2_DilatedEncoder_out(p2))
-        p3_out = self.output_layer_p3(self.P3_DilatedEncoder_out(p3))
-
-        # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
-        return p3_out, p2_out
-
-
-def _initialize_weights(model: nn.Module) -> nn.Module:
-    """
-    This function initialises the parameters of `model`.
-    Supported layers:
-    - Conv2d
-    - ConvTranspose2d
-    - Batchnorm2d
-    - Linear
-    """
-    for m in model.modules():
-        if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-            nn.init.kaiming_normal_(
-                m.weight, mode='fan_out', nonlinearity='relu')
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.BatchNorm2d):
-            nn.init.constant_(m.weight, 1)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.Linear):
-            nn.init.normal_(m.weight, 0, 0.01)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-    return model
-
-
-class ConvNormActivation(nn.Sequential):
-    """
-    This snippet is adapted from `ConvNormActivation` provided by torchvision.
-    Configurable block used for Convolution-Normalization-Activation blocks.
-    Args:
-        - `in_channels` (`int`): number of channels in the input image.
-        - `out_channels` (`int`): number of channels produced by the Convolution-Normalization-Activation block.
-        - `kernel_size`: (`int`, optional): size of the convolving kernel.
-            - Default: `3`
-        - `stride` (`int`, optional): stride of the convolution.
-            - Default: `1`
-        - `padding` (`int`, `tuple` or `str`, optional): padding added to all four sides of the input.
-            - Default: `None`, in which case it will calculated as `padding = (kernel_size - 1) // 2 * dilation`.
-        - `groups` (`int`, optional): number of blocked connections from input channels to output channels.
-            - Default: `1`
-        - `norm_layer` (`Callable[..., torch.nn.Module]`, optional): norm layer that will be stacked on top of the convolution layer. If `None` this layer won't be used.
-            - Default: `torch.nn.BatchNorm2d`.
-        - `activation_layer` (`Callable[..., torch.nn.Module]`, optional): activation function which will be stacked on top of the       normalization layer (if not `None`), otherwise on top of the `conv` layer. If `None` this layer wont be used.
-            - Default: `torch.nn.ReLU6`
-        - `dilation` (`int`): spacing between kernel elements.
-            - Default: `1`
-        - `inplace` (`bool`): parameter for the activation layer, which can optionally do the operation in-place.
-            - Default `True`
-    """
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int = 3,
-        stride: int = 1,
-        padding: Optional[int] = None,
-        dilation: int = 1,
-        groups: int = 1,
-        norm_layer: Optional[Callable[..., nn.Module]] = nn.BatchNorm2d,
-        activation_layer: Optional[Callable[...,
-                                            nn.Module]] = nn.ReLU6(inplace=True)
-    ) -> None:
-        if padding is None:
-            padding = (kernel_size - 1) // 2 * dilation
-        layers = [
-            nn.Conv2d(
-                in_channels,
-                out_channels,
-                kernel_size,
-                stride,
-                padding,
-                dilation=dilation,
-                groups=groups,
-                bias=norm_layer is None,
-            )
-        ]
-        if norm_layer is not None:
-            layers.append(norm_layer(out_channels))
-        if activation_layer is not None:
-            layers.append(activation_layer)
-        super().__init__(*layers)
-        self.out_channels = out_channels
-
-
-class FeatureFuser(nn.Module):
-    """
-    This module fuses features with different receptive field sizes.
-    1. Feat1 -> Feat1*
-    2. Feat2 & Feat1* -> Weight2
-       Feat3 & Feat1* -> Weight3
-       ...
-    3. Feat1* | (Feat2 * Weight2 + Feat3 * Weight3 + ...)
-    4. Bottleneck.
-    Args:
-        - `in_channels_list` (`list[int]`): a list of the number of each feature's channels. `in_channels_list[0]` should be the number of channels of the feature from a pooling layer, while others are numbers of channels of features from conv layers. The number of output channel of this block is `in_channels_list[0]`
-        - `batch_norm` (`bool`, optional): whether to use batch normalisation or not.
-            - Default: `True`.
-    """
-
-    def __init__(self, in_channels_list: List[int], batch_norm: bool = True) -> None:
-        super(FeatureFuser, self).__init__()
-        if batch_norm:
-            norm_layer = nn.BatchNorm2d
-        else:
-            norm_layer = None
-
-        for idx, c in enumerate(in_channels_list):
-            # Pooling layer.
-            if idx == 0:
-                num_1 = c
-            # The first conv layer.
-            elif idx == 1:
-                num_2 = c
-            # Other conv layers.
-            else:
-                assert num_2 == c
-
-        # Increase the number of channels of Feat1.
-        prior_conv = ConvNormActivation(
-            in_channels=num_1,
-            out_channels=num_2,
-            kernel_size=1,
-            norm_layer=norm_layer,
-            activation_layer=nn.ReLU(inplace=True)
-        )
-        self.prior_conv = _initialize_weights(prior_conv)
-
-        # Conv layer for weight generation.
-        weight_net = nn.Conv2d(
-            in_channels=num_2,
-            out_channels=num_2,
-            kernel_size=1,
-        )
-        self.weight_net = _initialize_weights(weight_net)
-
-        # Bottleneck layer.
-        posterior_conv = ConvNormActivation(
-            in_channels=num_2 * 2,
-            out_channels=num_2,
-            kernel_size=1,
-            norm_layer=norm_layer,
-            activation_layer=nn.ReLU(inplace=True)
-        )
-        self.posterior_conv = _initialize_weights(posterior_conv)
-
-    def __make_weights__(self, feat: Tensor, scaled_feat: Tensor) -> Tensor:
-        return torch.sigmoid(self.weight_net(feat - scaled_feat))
-
-    def forward(self, feats: List[Tensor]) -> Tensor:
-        feat_0, feat_1 = feats[0], feats[1]
-
-        # Increase the number of channels.
-        feat_0 = self.prior_conv(feat_0)
-
-        # Generate weights.
-        weights = [self.__make_weights__(feat_1, feat_0)]
-
-        # Fuse all features.
-        feats = [sum([feat_0 * weights[0]]) / sum(weights)] + [feat_1]
-        feats = torch.cat(feats, dim=1)
-
-        # Reduce the number of channels.
-        feats = self.posterior_conv(feats)
-
-        return feats
-
-
-class GhostNetV2P3_RFB_DE_Fusion(nn.Module):
-    def __init__(self, batch_norm=False, FEM_kernel_size=1, use_dilation=False, width=1.0, block=GhostBottleneckV2, args=None):
-        super(GhostNetV2P3_RFB_DE_Fusion, self).__init__()
-        self.cfgs = [
-            # k, t, c, SE, s
-            # ====== p1 ==============
-            # stage 0
-            [[3,  16,  16, 0, 1]],  # 0
-            # ====== p2 ==============
-            # stage 1
-            [[3,  48,  24, 0, 2]],
-            # stage 2
-            [[3,  72,  24, 0, 1]],  # 2
-            # ====== p3 ==============
-            # stage 3
-            [[5,  72,  40, 0.25, 2]],
-            # stage 4
-            [[5, 120,  40, 0.25, 1]],  # 4
-            # ====== p4 ==============
-            # stage 5
-            [[3, 240,  80, 0, 1]],
-            # stage 6
-            [[3, 200,  80, 0, 1],
-             [3, 184,  80, 0, 1],
-             [3, 184,  80, 0, 1],
-             [3, 480, 112, 0.25, 1],
-             [3, 672, 112, 0.25, 1]],  # 6
-            # ====== p5 ==============
-            # stage 7
-            [[5, 672, 160, 0.25, 2]],
-            # stage 8
-            [[5, 960, 160, 0, 1],
-             [5, 960, 160, 0.25, 1],
-             [5, 960, 160, 0, 1],
-             [5, 960, 160, 0.25, 1]]]  # 8
-
-        # building first layer
-        output_channel = _make_divisible(16 * width, 4)
-        self.conv_stem = nn.Conv2d(3, output_channel, 3, 2, 1, bias=False)
-        self.bn1 = nn.BatchNorm2d(output_channel)
-        self.act1 = nn.ReLU(inplace=True)
-        input_channel = output_channel
-
-        # building inverted residual blocks
-        stages = []
-        #block = block
-        layer_id = 0
-        for cfg in self.cfgs:
-            layers = []
-            for k, exp_size, c, se_ratio, s in cfg:
-                output_channel = _make_divisible(c * width, 4)
-                hidden_channel = _make_divisible(exp_size * width, 4)
-                if block == GhostBottleneckV2:
-                    layers.append(block(input_channel, hidden_channel, output_channel, k, s,
-                                  se_ratio=se_ratio, layer_id=layer_id, args=args))
-                input_channel = output_channel
-                layer_id += 1
-            stages.append(nn.Sequential(*layers))
-
-        self.blocks = nn.Sequential(*stages)
-
-        self.fuser_p2 = FeatureFuser([_make_divisible(
-            24 * width, 4), _make_divisible(24 * width, 4)], batch_norm=batch_norm)
-        self.fuser_p3 = FeatureFuser([_make_divisible(
-            40 * width, 4), _make_divisible(112 * width, 4)], batch_norm=batch_norm)
-        self.fuser_p4 = FeatureFuser([_make_divisible(
-            160 * width, 4), _make_divisible(160 * width, 4)], batch_norm=batch_norm)
-
-        self.P2_RFB = BasicRFB_a(in_planes=_make_divisible(
-            24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
-        self.P3_RFB = BasicRFB_a(in_planes=_make_divisible(
-            112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
-        self.P4_RFB = BasicRFB_a(in_planes=_make_divisible(
-            160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
-        self.P2_DilatedEncoder_out = DilatedEncoder(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
-            24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        self.P3_DilatedEncoder_out = DilatedEncoder(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(
-            112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        # building last layer
-        self.P2_FEM = FEM(in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), in_as_mid=True,
-                          mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.P3_FEM = FEM(in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4),
-                          out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.P4_FEM = FEM(in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4),
-                          out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.output_layer_p3 = nn.Conv2d(_make_divisible(
-            112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1)
-        self.output_layer_p2 = nn.Conv2d(
-            _make_divisible(24 * width, 4), 1, kernel_size=1)
-
-    def forward(self, x):
-        h, w = x.shape[2:4]
-        h //= 8
-        w //= 8
-
-        x = self.conv_stem(x)
-        x = self.bn1(x)
-        x = self.act1(x)
-        feats = []
-        for i, block in enumerate(self.blocks):
-            x = block(x)
-            feats.append(x)
-
-        p2, p3, p4 = [feats[1], feats[2]], [
-            feats[3], feats[6]], [feats[7], feats[8]]
-
-        p2 = self.fuser_p2(p2)
-        p3 = self.fuser_p3(p3)
-        p4 = self.fuser_p4(p4)
-
-        p2 = self.P2_RFB(p2)
-        p3 = self.P3_RFB(p3)
-        p4 = self.P4_RFB(p4)
-
-        p4 = self.P4_FEM(p4)
-        p4_up = F.interpolate(
-            p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
-
-        p3 = self.P3_FEM(torch.cat([p3, p4_up], dim=1))
-        p3_up = F.interpolate(
-            p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
-
-        p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
-
-        p2_out = self.output_layer_p2(self.P2_DilatedEncoder_out(p2))
-        p3_out = self.output_layer_p3(self.P3_DilatedEncoder_out(p3))
-
-        # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
-        return p3_out, p2_out
 
 
 class ContextualModule(nn.Module):
@@ -873,9 +453,9 @@ class ContextualModule(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
-class GhostNetV2P3_RFB_DE_CAN(nn.Module):
+class GhostNetV2P3_RFB_CAN_REB(nn.Module):
     def __init__(self, FEM_kernel_size=1, use_dilation=False, width=1.0, block=GhostBottleneckV2, args=None):
-        super(GhostNetV2P3_RFB_DE_CAN, self).__init__()
+        super(GhostNetV2P3_RFB_CAN_REB, self).__init__()
         self.cfgs = [
             # k, t, c, SE, s
             # ====== p1 ==============
@@ -934,17 +514,18 @@ class GhostNetV2P3_RFB_DE_CAN(nn.Module):
 
         self.blocks = nn.Sequential(*stages)
 
-        self.ContextualModule = ContextualModule(in_channels=_make_divisible(112 * width, 4), out_channels=_make_divisible(112 * width, 4))
-        
-        self.P2_RFB = BasicRFB_a(in_planes=_make_divisible(
+        self.ContextualModule = ContextualModule(in_channels=_make_divisible(
+            112 * width, 4), out_channels=_make_divisible(112 * width, 4))
+
+        self.P2_RFB = RFB(in_planes=_make_divisible(
             24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
-        self.P3_RFB = BasicRFB_a(in_planes=_make_divisible(
+        self.P3_RFB = RFB(in_planes=_make_divisible(
             112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
-        self.P4_RFB = BasicRFB_a(in_planes=_make_divisible(
+        self.P4_RFB = RFB(in_planes=_make_divisible(
             160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
-        self.P2_DilatedEncoder_out = DilatedEncoder(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
+        self.P2_REB_out = REB(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
             24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        self.P3_DilatedEncoder_out = DilatedEncoder(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(
+        self.P3_REB_out = REB(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(
             112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
         # building last layer
         self.P2_FEM = FEM(in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), in_as_mid=True,
@@ -985,15 +566,15 @@ class GhostNetV2P3_RFB_DE_CAN(nn.Module):
 
         p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
 
-        p2_out = self.output_layer_p2(self.P2_DilatedEncoder_out(p2))
-        p3_out = self.output_layer_p3(self.P3_DilatedEncoder_out(p3))
+        p2_out = self.output_layer_p2(self.P2_REB_out(p2))
+        p3_out = self.output_layer_p3(self.P3_REB_out(p3))
 
         # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
         return p3_out, p2_out
 
 
 if __name__ == '__main__':
-    model = GhostNetV2P3_RFB_DE_CAN(
+    model = GhostNetV2P3_RFB_CAN_REB(
         use_dilation=False, width=1.6).to('cuda')
     # model = GhostNetV2P3_RFB(use_dilation=False, width=1.6).to('cuda')
     # checkpoint_path = '/home/gp.sc.cc.tohoku.ac.jp/duanct/openmmlab/GhostDensNet/checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar'
