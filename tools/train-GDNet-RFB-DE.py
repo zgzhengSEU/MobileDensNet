@@ -15,7 +15,7 @@ import math
 print(f'[work_dis: {os.getcwd()}]')
 import sys
 sys.path.append('.')
-from model import GhostNetV2P3_RFB as USE_MODEL
+from model import GhostNetV2P3_RFB_DE as USE_MODEL
 from model import CrowdDataset, CrowdDataset_p2
 from utils import train_one_epoch_single_gpu_p2loc, evaluate_single_gpu_p2loc
 
@@ -67,7 +67,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='GhostNetV2P3_RFB'
+    wandb_name='GhostNetV2P3_RFB_DE'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"

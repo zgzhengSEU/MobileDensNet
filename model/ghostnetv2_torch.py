@@ -1553,6 +1553,7 @@ class FEM(nn.Module):
                  in_channels,
                  mid_channels,
                  out_channels,
+                 in_as_mid=False,
                  kernel_size=1,
                  use_dilation=False):
         super().__init__()
@@ -1567,12 +1568,12 @@ class FEM(nn.Module):
         else:
             pad = 0
 
-        self.conv_stem = nn.Conv2d(in_channels, in_channels,
+        self.conv_stem = nn.Conv2d(in_channels, mid_channels if in_as_mid else in_channels,
                               kernel_size=kernel_size, padding=pad, dilation=dilation)
 
         self.maxpool1 = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
         self.conv1 = nn.Conv2d(
-            in_channels, mid_channels, kernel_size=kernel_size, padding=pad,  dilation=dilation)
+            mid_channels if in_as_mid else in_channels, mid_channels, kernel_size=kernel_size, padding=pad,  dilation=dilation)
         self.maxpool2 = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
         self.conv2 = nn.Conv2d(mid_channels, mid_channels,
                                kernel_size=kernel_size, padding=pad,  dilation=dilation)
@@ -1581,12 +1582,12 @@ class FEM(nn.Module):
                                kernel_size=kernel_size, padding=pad,  dilation=dilation)
 
         self.final_conv = nn.Conv2d(
-            mid_channels * 3 + in_channels, out_channels, kernel_size=kernel_size, padding=pad,  dilation=dilation)
+            mid_channels * 3 + (mid_channels if in_as_mid else in_channels), out_channels, kernel_size=kernel_size, padding=pad,  dilation=dilation)
 
     def forward(self, x):
         shortcut = self.conv_stem(x)
         
-        x = self.maxpool1(x)
+        x = self.maxpool1(shortcut)
         x = self.conv1(x)
         shortcut1 = x
         x = self.maxpool2(x)
@@ -1664,16 +1665,14 @@ class GhostNetV2P3_DilatedEncoder(nn.Module):
 
 
         self.P2_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        self.P3_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(112 * width, 4), out_channels=_make_divisible(112 * width, 4), block_mid_channels=_make_divisible(80 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        self.P3_DilatedEncoder_out = DilatedEncoder(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(80 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
-        self.P4_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(160 * width, 4), out_channels=_make_divisible(160 * width, 4), block_mid_channels=_make_divisible(80 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+        self.P2_DilatedEncoder_out = DilatedEncoder(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+        self.P3_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(112 * width, 4), out_channels=_make_divisible(112 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+        self.P3_DilatedEncoder_out = DilatedEncoder(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+        self.P4_DilatedEncoder = DilatedEncoder(in_channels=_make_divisible(160 * width, 4), out_channels=_make_divisible(160 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
         # building last layer
-        self.P2_FEM = FEM(
-            in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.P3_FEM = FEM(
-            in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.P4_FEM = FEM(
-            in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4), out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P2_FEM = FEM(in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), in_as_mid=True, mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P3_FEM = FEM(in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P4_FEM = FEM(in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(60 * width, 4), out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
         self.output_layer_p3 = nn.Conv2d(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1)
         self.output_layer_p2 = nn.Conv2d(_make_divisible(24 * width, 4), 1, kernel_size=1)
     def forward(self, x):
@@ -1701,6 +1700,7 @@ class GhostNetV2P3_DilatedEncoder(nn.Module):
         p3_up = F.interpolate(p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
         p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
         
+        p2 = self.P2_DilatedEncoder_out(p2)
         p3 = self.P3_DilatedEncoder_out(p3)
         
         p2_out = self.output_layer_p2(p2)
@@ -1900,17 +1900,14 @@ class GhostNetV2P3_RFB(nn.Module):
 
 
         self.P2_RFB = BasicRFB_a(in_planes=_make_divisible(24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
-        self.P3_RFB = BasicRFB(in_planes=_make_divisible(112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
-        self.P4_RFB = BasicRFB(in_planes=_make_divisible(160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
-        
-        self.P3_RFB_out = BasicRFB(in_planes=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_planes=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), scale=1.0)
+        self.P3_RFB = BasicRFB_a(in_planes=_make_divisible(112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
+        self.P4_RFB = BasicRFB_a(in_planes=_make_divisible(160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
+        self.P2_RFB_out = BasicRFB_a(in_planes=_make_divisible(24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
+        self.P3_RFB_out = BasicRFB_a(in_planes=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_planes=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), scale=1.0)
         # building last layer
-        self.P2_FEM = FEM(
-            in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.P3_FEM = FEM(
-            in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.P4_FEM = FEM(
-            in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4), out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P2_FEM = FEM(in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), in_as_mid=True, mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P3_FEM = FEM(in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P4_FEM = FEM(in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4), out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
         self.output_layer_p3 = nn.Conv2d(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1)
         self.output_layer_p2 = nn.Conv2d(_make_divisible(24 * width, 4), 1, kernel_size=1)
     def forward(self, x):
@@ -1938,17 +1935,121 @@ class GhostNetV2P3_RFB(nn.Module):
         
         p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
          
-        p2_out = self.output_layer_p2(p2)
+        p2_out = self.output_layer_p2(self.P2_RFB_out(p2))
         p3_out = self.output_layer_p3(self.P3_RFB_out(p3))
         
         # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
         return p3_out, p2_out
 
 
+class GhostNetV2P3_RFB_DE(nn.Module):
+    def __init__(self, FEM_kernel_size=1, use_dilation=False, width=1.0, block=GhostBottleneckV2, args=None):
+        super(GhostNetV2P3_RFB_DE, self).__init__()
+        self.cfgs = [
+            # k, t, c, SE, s
+            # ====== p1 ==============
+            # stage 0
+            [[3,  16,  16, 0, 1]],  # 0
+            # ====== p2 ==============
+            # stage 1
+            [[3,  48,  24, 0, 2]],
+            # stage 2
+            [[3,  72,  24, 0, 1]],  # 2
+            # ====== p3 ==============
+            # stage 3
+            [[5,  72,  40, 0.25, 2]],
+            # stage 4
+            [[5, 120,  40, 0.25, 1]],  # 4
+            # ====== p4 ==============
+            # stage 5
+            [[3, 240,  80, 0, 1]],
+            # stage 6
+            [[3, 200,  80, 0, 1],
+             [3, 184,  80, 0, 1],
+             [3, 184,  80, 0, 1],
+             [3, 480, 112, 0.25, 1],
+             [3, 672, 112, 0.25, 1]],  # 6
+            # ====== p5 ==============
+            # stage 7
+            [[5, 672, 160, 0.25, 2]],
+            # stage 8
+            [[5, 960, 160, 0, 1],
+             [5, 960, 160, 0.25, 1],
+             [5, 960, 160, 0, 1],
+             [5, 960, 160, 0.25, 1]]]  # 8
+
+        # building first layer
+        output_channel = _make_divisible(16 * width, 4)
+        self.conv_stem = nn.Conv2d(3, output_channel, 3, 2, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(output_channel)
+        self.act1 = nn.ReLU(inplace=True)
+        input_channel = output_channel
+
+        # building inverted residual blocks
+        stages = []
+        #block = block
+        layer_id = 0
+        for cfg in self.cfgs:
+            layers = []
+            for k, exp_size, c, se_ratio, s in cfg:
+                output_channel = _make_divisible(c * width, 4)
+                hidden_channel = _make_divisible(exp_size * width, 4)
+                if block == GhostBottleneckV2:
+                    layers.append(block(input_channel, hidden_channel, output_channel, k, s,
+                                  se_ratio=se_ratio, layer_id=layer_id, args=args))
+                input_channel = output_channel
+                layer_id += 1
+            stages.append(nn.Sequential(*layers))
+
+        self.blocks = nn.Sequential(*stages)
+
+
+        self.P2_RFB = BasicRFB_a(in_planes=_make_divisible(24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
+        self.P3_RFB = BasicRFB_a(in_planes=_make_divisible(112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
+        self.P4_RFB = BasicRFB_a(in_planes=_make_divisible(160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
+        self.P2_DilatedEncoder_out = DilatedEncoder(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+        self.P3_DilatedEncoder_out = DilatedEncoder(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+        # building last layer
+        self.P2_FEM = FEM(in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), in_as_mid=True, mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P3_FEM = FEM(in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4), out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.P4_FEM = FEM(in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4), out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+        self.output_layer_p3 = nn.Conv2d(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1)
+        self.output_layer_p2 = nn.Conv2d(_make_divisible(24 * width, 4), 1, kernel_size=1)
+    def forward(self, x):
+        h, w = x.shape[2:4]
+        h //= 8
+        w //= 8
+
+        x = self.conv_stem(x)
+        x = self.bn1(x)
+        x = self.act1(x)
+        feat = []
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            if i in [2, 6, 8]:
+                feat.append(x)
+        p2 = self.P2_RFB(feat[0])
+        p3 = self.P3_RFB(feat[1])
+        p4 = self.P4_RFB(feat[2])
+        
+        p4 =self.P4_FEM(p4)
+        p4_up = F.interpolate(p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
+        
+        p3 = self.P3_FEM(torch.cat([p3, p4_up], dim=1))
+        p3_up = F.interpolate(p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
+        
+        p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
+         
+        p2_out = self.output_layer_p2(self.P2_DilatedEncoder_out(p2))
+        p3_out = self.output_layer_p3(self.P3_DilatedEncoder_out(p3))
+        
+        # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
+        return p3_out, p2_out
+
 
 
 if __name__ == '__main__':
-    model = GhostNetV2P3_DilatedEncoder(use_dilation=False, width=1.6).to('cuda')
+    model = GhostNetV2P3_RFB_DE(use_dilation=False, width=1.6).to('cuda')
     # model = GhostNetV2P3_RFB(use_dilation=False, width=1.6).to('cuda')
     # checkpoint_path = '/home/gp.sc.cc.tohoku.ac.jp/duanct/openmmlab/GhostDensNet/checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar'
     # load_checkpoint(model, checkpoint_path, strict=False, map_location='cuda')

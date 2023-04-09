@@ -5,3 +5,4 @@ from model.CrowdDataset import *
 from model.mobilenetV3 import *
 from model.CANNet import *
 from model.GhostDensNet import *
+from model.GDNet import *
