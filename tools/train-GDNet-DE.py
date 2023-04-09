@@ -209,9 +209,6 @@ def main(args):
             wandb.log({'MSELoss': mean_loss})
             wandb.log({'MAE': min(mean_mae, 1000)})
             wandb.log({'MSE': min(mean_mse, 1000)})
-            wandb.log({'MinMAE': min_mae})
-            wandb.log({'MinMSE': min_mse})
-            wandb.log({'MinEpoch': min_epoch})
             wandb.log({'lr': optimizer.param_groups[0]["lr"]})
             print(f"[epoch {epoch}] wandb log done!")
             

@@ -199,7 +199,7 @@ def train_one_epoch_single_gpu_p2loc(model,
         if not torch.isfinite(loss):
             print('WARNING: non-finite loss, ending training ', loss)
             sys.exit(1)
-            
+
         optimizer.step()
         with warmup_scheduler.dampening():
             lr_scheduler.step()
