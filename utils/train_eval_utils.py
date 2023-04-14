@@ -11,6 +11,8 @@ import wandb
 from torchvision import transforms
 import math
 import torch.nn.functional as F
+from torch.nn.utils import clip_grad_norm_
+from torch.cuda.amp import autocast as autocast
 
 def train_one_epoch(model,
                     optimizer,
@@ -69,7 +71,9 @@ def train_one_epoch_p2(model,
                     device,
                     epoch,
                     lr_scheduler,
-                    warmup_scheduler):
+                    warmup_scheduler,
+                    use_amp,
+                    scaler):
     model.train()
 
     criterion = nn.MSELoss(reduction='sum').to(device)
@@ -85,12 +89,23 @@ def train_one_epoch_p2(model,
         img = img.to(device)
         gt_dmap = gt_dmap.to(device)
         gt_dmap_p2 = gt_dmap_p2.to(device)
-        # forward propagation
-        et_dmap_p3, et_dmap_p2 = model(img)
-        # calculate loss
-        et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
-        loss = criterion(et_dmap_p3, gt_dmap) + 0.0001 * criterion(et_dmap_p2, gt_dmap_p2)
-        loss.backward()
+        if use_amp:
+            # forward propagation
+            with autocast():
+                et_dmap_p3, et_dmap_p2 = model(img)
+                # calculate loss
+                # with torch.cuda.amp.autocast(enabled=False):
+                et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
+                loss = criterion(et_dmap_p3, gt_dmap) + 0.0001 * criterion(et_dmap_p2, gt_dmap_p2)
+            scaler.scale(loss).backward()
+        else:
+            # forward propagation
+            et_dmap_p3, et_dmap_p2 = model(img)
+            # calculate loss
+            et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
+            loss = criterion(et_dmap_p3, gt_dmap) + 0.0001 * criterion(et_dmap_p2, gt_dmap_p2)
+            loss.backward()
+        
         loss = reduce_value(loss, average=True)
         # update mean losses
         mean_loss = (mean_loss * step + loss.detach()) / (step + 1)
@@ -100,11 +115,18 @@ def train_one_epoch_p2(model,
             train_loader.desc = "[epoch {}] mean loss {}".format(
                 epoch, round(mean_loss.item(), 3))
 
+        if use_amp:
+            # scaler.unscale_(optimizer)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
+        
         if not torch.isfinite(loss):
-            print('WARNING: non-finite loss, ending training ', loss)
+            print('WARNING: non-finite loss, ending training !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!', loss)
             sys.exit(1)
-
-        optimizer.step()
+            
         with warmup_scheduler.dampening():
             lr_scheduler.step()
 
@@ -293,7 +315,6 @@ def evaluate_p2(model,
              show_images=False,
              use_wandb=False):
     model.eval()
-
     mae = torch.zeros(1).to(device)
     mse = torch.zeros(1).to(device)
     # 在进程0中打印验证进度
@@ -329,7 +350,7 @@ def evaluate_p2(model,
                 gt_dmap_np = cv2.resize(gt_dmap_np, dsize=(w, h))
                 plt.imshow(gt_dmap_np, alpha=0.5, cmap='turbo')
                 fig1.savefig(f"checkpoints/temp/temp_gt_{epoch}.png",
-                             bbox_inches='tight', pad_inches=0)
+                            bbox_inches='tight', pad_inches=0)
                 fig1.clear()
                 plt.close('all')
                 # ============ et ==============
@@ -340,7 +361,7 @@ def evaluate_p2(model,
                 et_dmap_np = cv2.resize(et_dmap_np, dsize=(w, h))
                 plt.imshow(et_dmap_np, alpha=0.5, cmap='turbo')
                 fig2.savefig(f"checkpoints/temp/temp_et_{epoch}.png",
-                             bbox_inches='tight', pad_inches=0)
+                            bbox_inches='tight', pad_inches=0)
                 fig2.clear()
                 plt.close('all')
                 # =========== upload ============

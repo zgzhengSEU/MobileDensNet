@@ -397,17 +397,17 @@ class REB(nn.Module):
                     self.out_channels,
                     self.block_mid_channels,
                     dilation=dilation))
-        self.dilated_encoder_blocks = nn.Sequential(*encoder_blocks)
+        self.REB_blocks = nn.Sequential(*encoder_blocks)
 
     def init_weights(self):
-        for m in self.dilated_encoder_blocks.modules():
+        for m in self.REB_blocks.modules():
             if isinstance(m, nn.Conv2d):
                 normal_init(m, mean=0, std=0.01)
             if is_norm(m):
                 constant_init(m, 1)
 
     def forward(self, x):
-        return self.dilated_encoder_blocks(x)
+        return self.REB_blocks(x)
 
 
 class ContextualModule(nn.Module):
@@ -435,8 +435,9 @@ class ContextualModule(nn.Module):
         h, w = feats.size(2), feats.size(3)
         multi_scales = [F.interpolate(input=stage(feats), size=(
             h, w), mode='bilinear', align_corners=True) for stage in self.scales]
-        weights = [self.__make_weight(feats, scale_feature)
-                   for scale_feature in multi_scales]
+        with torch.cuda.amp.autocast(enabled=False):
+            weights = [self.__make_weight(feats.to(dtype=torch.float32), scale_feature.to(dtype=torch.float32)).to(dtype=feats.dtype)
+                    for scale_feature in multi_scales]
         overall_features = [(multi_scales[0] * weights[0] + multi_scales[1]*weights[1] + multi_scales[2] *
                              weights[2] + multi_scales[3] * weights[3]) / (weights[0] + weights[1] + weights[2] + weights[3])] + [feats]
         bottle = self.bottleneck(torch.cat(overall_features, 1))
@@ -454,7 +455,7 @@ class ContextualModule(nn.Module):
 
 
 class GhostNetV2P3_RFB_CAN_REB(nn.Module):
-    def __init__(self, FEM_kernel_size=1, use_dilation=False, width=1.0, block=GhostBottleneckV2, args=None):
+    def __init__(self, FEM_kernel_size=1, use_dilation=False, use_CAN=False, width=1.0, block=GhostBottleneckV2, args=None):
         super(GhostNetV2P3_RFB_CAN_REB, self).__init__()
         self.cfgs = [
             # k, t, c, SE, s
@@ -489,6 +490,7 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
              [5, 960, 160, 0, 1],
              [5, 960, 160, 0.25, 1]]]  # 8
 
+        self.use_CAN = use_CAN
         # building first layer
         output_channel = _make_divisible(16 * width, 4)
         self.conv_stem = nn.Conv2d(3, output_channel, 3, 2, 1, bias=False)
@@ -513,9 +515,10 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
             stages.append(nn.Sequential(*layers))
 
         self.blocks = nn.Sequential(*stages)
-
-        self.ContextualModule = ContextualModule(in_channels=_make_divisible(
-            112 * width, 4), out_channels=_make_divisible(112 * width, 4))
+        
+        if self.use_CAN:
+            self.ContextualModule = ContextualModule(in_channels=_make_divisible(
+                112 * width, 4), out_channels=_make_divisible(112 * width, 4))
 
         self.P2_RFB = RFB(in_planes=_make_divisible(
             24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
@@ -534,16 +537,12 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
                           out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
         self.P4_FEM = FEM(in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4),
                           out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
-        self.output_layer_p3 = nn.Conv2d(_make_divisible(
-            112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1)
-        self.output_layer_p2 = nn.Conv2d(
-            _make_divisible(24 * width, 4), 1, kernel_size=1)
+        self.output_layer_p3 = ConvModule(_make_divisible(
+            112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1, norm_cfg=dict(type='BN', requires_grad=True))
+        self.output_layer_p2 = ConvModule(
+            _make_divisible(24 * width, 4), 1, kernel_size=1, norm_cfg=dict(type='BN', requires_grad=True))
 
     def forward(self, x):
-        h, w = x.shape[2:4]
-        h //= 8
-        w //= 8
-
         x = self.conv_stem(x)
         x = self.bn1(x)
         x = self.act1(x)
@@ -553,7 +552,10 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
             if i in [2, 6, 8]:
                 feat.append(x)
         p2 = self.P2_RFB(feat[0])
-        p3 = self.ContextualModule(self.P3_RFB(feat[1]))
+        if self.use_CAN:
+            p3 = self.ContextualModule(self.P3_RFB(feat[1]))
+        else:
+            p3 = self.P3_RFB(feat[1])
         p4 = self.P4_RFB(feat[2])
 
         p4 = self.P4_FEM(p4)
@@ -568,8 +570,7 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
 
         p2_out = self.output_layer_p2(self.P2_REB_out(p2))
         p3_out = self.output_layer_p3(self.P3_REB_out(p3))
-
-        # out = F.interpolate(p2, size=(h, w), mode='bilinear', align_corners=True)
+        
         return p3_out, p2_out
 
 

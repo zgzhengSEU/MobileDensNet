@@ -264,8 +264,8 @@ def main(args):
 
             if use_wandb:
                 wandb.log({'MSELoss': mean_loss})
-                wandb.log({'MAE': min(mean_mae, 1000)})
-                wandb.log({'MSE': min(mean_mse, 1000)})
+                wandb.log({'MAE': min(mean_mae, 500)})
+                wandb.log({'MSE': min(mean_mse, 500)})
                 wandb.log({'MinMAE': min_mae})
                 wandb.log({'MinMSE': min_mse})
                 wandb.log({'MinEpoch': min_epoch})
