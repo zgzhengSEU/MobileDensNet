@@ -38,8 +38,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=150)
     parser.add_argument('--lr', type=float, default=1e-6)
-    parser.add_argument('--amp', type=bool, default=True)
-    parser.add_argument('--wandb', type=bool, default=True)
+    parser.add_argument('--amp', action='store_true', default=False)
+    parser.add_argument('--wandb', action='store_true', default=False)
     parser.add_argument('--show_images', type=bool, default=True)
     parser.add_argument('--resume', type=bool, default=False)
     parser.add_argument('--resume_id', type=str, default='ibj5t827')
@@ -98,7 +98,8 @@ def main(args):
     temp_init_checkpoint_path = "checkpoints"
     resume_checkpoint = args.resume_checkpoint
     use_amp = args.amp
-    
+    print(f'use_amp: {use_amp}')
+    print(f'use_wandb: {args.wandb}')
     use_wandb = args.wandb
     show_images = args.show_images
     resume = args.resume
@@ -158,7 +159,7 @@ def main(args):
     train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler,num_workers=train_num_workers, pin_memory=True)
     test_loader = DataLoader(test_dataset, sampler=test_sampler, num_workers=test_num_workers, batch_size=1, shuffle=False, pin_memory=True)
     # ========================================= model =================================================
-    model = USE_MODEL(width=1.6).to(device)
+    model = USE_MODEL(width=1.6, use_CAN=True).to(device)
 
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
@@ -213,8 +214,9 @@ def main(args):
     if not resume:
         pg = [p for p in model.parameters() if p.requires_grad]
         num_steps = len(train_loader) * epochs
-        optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
-        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+        optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4, eps=1e-8)
+        # scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=1)
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=5)
         # warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
         scaler = GradScaler()
     # ========================================= train and eval ============================================
@@ -231,7 +233,7 @@ def main(args):
             train_loader=train_loader,
             device=device,
             epoch=epoch,
-            # lr_scheduler=scheduler,
+            lr_scheduler=scheduler,
             # warmup_scheduler=warmup_scheduler,
             use_amp=use_amp,
             scaler=scaler
@@ -257,7 +259,7 @@ def main(args):
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optim_state_dict': optimizer.state_dict(),
-                # 'scheduler': scheduler.state_dict(),
+                'scheduler': scheduler.state_dict(),
                 # 'warmup_scheduler': warmup_scheduler.state_dict(),
                 "scaler": scaler.state_dict()}
             torch.save(checkpoint_dict, f'{work_dir}/{wandb_name}_{datatype}_epoch_{epoch}.pth.tar')
@@ -329,6 +331,8 @@ def train_one_epoch_p2(model,
                 et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
                 loss = criterion(et_dmap_p3, gt_dmap) + 0.0001 * criterion(et_dmap_p2, gt_dmap_p2)
             scaler.scale(loss).backward()
+            
+            
         else:
             # forward propagation
             et_dmap_p3, et_dmap_p2 = model(img)
@@ -350,16 +354,22 @@ def train_one_epoch_p2(model,
             # scaler.unscale_(optimizer)
             # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
             scaler.step(optimizer)
+            scale = scaler.get_scale()
             scaler.update()
+            skip_lr_sched = (scale > scaler.get_scale())
+            
+            if not skip_lr_sched:
+                lr_scheduler.step()
         else:
             optimizer.step()
+            lr_scheduler.step()
         
         if not torch.isfinite(loss):
             print('WARNING: non-finite loss, ending training !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!', loss)
             sys.exit(1)
             
         # with warmup_scheduler.dampening():
-        #     lr_scheduler.step()
+        
 
     # 等待所有进程计算完毕
     if device != torch.device("cpu"):

@@ -455,8 +455,9 @@ class ContextualModule(nn.Module):
 
 
 class GhostNetV2P3_RFB_CAN_REB(nn.Module):
-    def __init__(self, FEM_kernel_size=1, use_dilation=False, use_CAN=False, width=1.0, block=GhostBottleneckV2, args=None):
+    def __init__(self, FEM_kernel_size=1, use_dilation=False, use_CAN=True, use_se=True, width=1.0, block=GhostBottleneckV2, args=None):
         super(GhostNetV2P3_RFB_CAN_REB, self).__init__()
+        
         self.cfgs = [
             # k, t, c, SE, s
             # ====== p1 ==============
@@ -469,9 +470,9 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
             [[3,  72,  24, 0, 1]],  # 2
             # ====== p3 ==============
             # stage 3
-            [[5,  72,  40, 0.25, 2]],
+            [[5,  72,  40, 0.25 if use_se else 0, 2]],
             # stage 4
-            [[5, 120,  40, 0.25, 1]],  # 4
+            [[5, 120,  40, 0.25 if use_se else 0, 1]],  # 4
             # ====== p4 ==============
             # stage 5
             [[3, 240,  80, 0, 1]],
@@ -479,16 +480,16 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
             [[3, 200,  80, 0, 1],
              [3, 184,  80, 0, 1],
              [3, 184,  80, 0, 1],
-             [3, 480, 112, 0.25, 1],
-             [3, 672, 112, 0.25, 1]],  # 6
+             [3, 480, 112, 0.25 if use_se else 0, 1],
+             [3, 672, 112, 0.25 if use_se else 0, 1]],  # 6
             # ====== p5 ==============
             # stage 7
-            [[5, 672, 160, 0.25, 2]],
+            [[5, 672, 160, 0.25 if use_se else 0, 2]],
             # stage 8
             [[5, 960, 160, 0, 1],
-             [5, 960, 160, 0.25, 1],
+             [5, 960, 160, 0.25 if use_se else 0, 1],
              [5, 960, 160, 0, 1],
-             [5, 960, 160, 0.25, 1]]]  # 8
+             [5, 960, 160, 0.25 if use_se else 0, 1]]]  # 8
 
         self.use_CAN = use_CAN
         # building first layer
