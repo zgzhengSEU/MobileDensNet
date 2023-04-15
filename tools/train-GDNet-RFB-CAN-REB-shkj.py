@@ -15,16 +15,17 @@ import math
 print(f'[work_dis: {os.getcwd()}]')
 import sys
 sys.path.append('.')
-from model import GhostNetV2P3_RFB_DE_Fusion as USE_MODEL
+from model import GhostNetV2P3_RFB_DE_CAN as USE_MODEL
 from model import CrowdDataset, CrowdDataset_p2
 from utils import train_one_epoch_single_gpu_p2loc, evaluate_single_gpu_p2loc
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=300)
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--wandb', type=bool, default=False)
+    parser.add_argument('--epochs', type=int, default=150)
+    parser.add_argument('--lr', type=float, default=1e-6)
+    parser.add_argument('--amp', action='store_true', default=False)
+    parser.add_argument('--wandb', action='store_true', default=False)
     parser.add_argument('--show_images', type=bool, default=True)
     parser.add_argument('--resume', type=bool, default=False)
     parser.add_argument('--resume_id', type=str, default='5tpdfo8k')
@@ -67,7 +68,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='GhostNetV2P3_RFB_DE_Fusion'
+    wandb_name='GhostNetV2P3_RFB_DE_CAN'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"

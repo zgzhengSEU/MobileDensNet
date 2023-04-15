@@ -365,7 +365,7 @@ def train_one_epoch_p2(model,
             lr_scheduler.step()
         
         if not torch.isfinite(loss):
-            print('WARNING: non-finite loss, ending training !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!', loss)
+            print('WARNING: non-finite loss, ending training !!!', loss)
             sys.exit(1)
             
         # with warmup_scheduler.dampening():
