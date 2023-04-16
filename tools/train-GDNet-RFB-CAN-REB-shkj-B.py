@@ -31,8 +31,8 @@ from model import CrowdDataset, CrowdDataset_p2
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=150)
-    parser.add_argument('--lr', type=float, default=1e-6)
+    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--amp', action='store_true', default=False)
     parser.add_argument('--wandb', action='store_true', default=False)
     parser.add_argument('--show_images', type=bool, default=True)
@@ -50,9 +50,9 @@ def main(args):
         raise EnvironmentError("not find GPU device for training.")
     # ===================== DataPath =========================
     # datatype = 'ShanghaiTech_part_A'
-    # datatype = 'ShanghaiTech_part_B'
+    datatype = 'ShanghaiTech_part_B'
     # datatype = 'VisDrone2020-CC'
-    datatype = 'VisDrone'
+    # datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
         train_image_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/images'
         train_dmap_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/ground-truth'
@@ -174,10 +174,10 @@ def main(args):
     # ===================================== optimizer ===========================================
     if not resume:
         pg = [p for p in model.parameters() if p.requires_grad]
-        num_steps = len(train_loader) * epochs
+        # num_steps = len(train_loader) * epochs
         optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
-        # scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=1)
-        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=5)
+        scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=2, T_mult=2)
+        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=5)
         # warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
         if use_amp:
             scaler = GradScaler()
@@ -269,7 +269,7 @@ def train_one_epoch_single_gpu_p2loc(model,
 
     # 打印训练进度
     train_loader = tqdm(train_loader, file=sys.stdout)
-
+    iters = len(train_loader)
     for step, (img, gt_dmap, gt_dmap_p2) in enumerate(train_loader):
         optimizer.zero_grad()
         img = img.to(device)
@@ -309,16 +309,16 @@ def train_one_epoch_single_gpu_p2loc(model,
             if not skip_lr_sched:
                 if warmup_scheduler is not None:
                     with warmup_scheduler.dampening():
-                        lr_scheduler.step()
+                        lr_scheduler.step(epoch + step / iters)
                 else:
-                    lr_scheduler.step()
+                    lr_scheduler.step(epoch + step / iters)
         else:
             optimizer.step()
             if warmup_scheduler is not None:
                 with warmup_scheduler.dampening():
                     lr_scheduler.step()
             else:
-                lr_scheduler.step()
+                lr_scheduler.step(epoch + step / iters)
         
         if not torch.isfinite(loss):
             print('WARNING: non-finite loss, ending training !!!', loss)
