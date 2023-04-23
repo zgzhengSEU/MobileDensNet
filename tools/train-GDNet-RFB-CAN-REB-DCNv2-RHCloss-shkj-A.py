@@ -34,7 +34,8 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--amp', action='store_true', default=False)
-    parser.add_argument('--wandb', action='store_true', default=False)
+    parser.add_argument('--wandb', action='store_true', default=True)
+    parser.add_argument('--online', action='store_true', default=False)
     parser.add_argument('--show_images', type=bool, default=True)
     parser.add_argument('--resume', type=bool, default=False)
     parser.add_argument('--resume_id', type=str, default='5tpdfo8k')
@@ -76,8 +77,8 @@ def main(args):
     # ===================== wandb =============================
     wandb_project="Density"
     wandb_group=datatype
-    wandb_mode="online"
-    wandb_name='GhostNetV2P3_RFB_CAN_REB'
+    wandb_mode="online" if args.online else 'offline'
+    wandb_name='train-GDNet-RFB-CAN-REB-DCNv2-RHCloss'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"
@@ -140,7 +141,7 @@ def main(args):
     train_loader=DataLoader(train_dataset,batch_size=1,shuffle=True, num_workers=train_num_workers, pin_memory=True)
     test_loader=DataLoader(test_dataset,batch_size=1,shuffle=False, num_workers=test_num_workers, pin_memory=True)
     # ========================================= model =================================================
-    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True).to(device)
+    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True, use_dcn_mode=5).to(device)
 
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
@@ -174,12 +175,18 @@ def main(args):
     # ===================================== optimizer ===========================================
     if not resume:
         pg = [p for p in model.parameters() if p.requires_grad]
-        # num_steps = len(train_loader) * epochs
-        # optimizer = optim.AdamW(pg, lr=lr)
-        optimizer = optim.SGD(pg, lr=lr, momentum=0.95, weight_decay=5e-4)
-        scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
-        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=5)
+        num_steps = len(train_loader) * epochs
+        # optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
+        optimizer = optim.AdamW(pg, lr=lr)
+        # optimizer = optim.SGD(pg, lr=lr, momentum=0.95, weight_decay=5e-4)
+        # scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=25, T_mult=1)
+        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=50)
+        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+        scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100, 150, 200, 250], gamma=0.8)
+        StepLR = True
+        # scheduler = None
         # warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
+        warmup_scheduler = None
         if use_amp:
             scaler = GradScaler()
         else:
@@ -190,14 +197,14 @@ def main(args):
     min_epoch = 0
     for epoch in range(start_epoch, epochs):
         # training phase
-        mean_loss = train_one_epoch_single_gpu_p2loc(
+        mean_loss = train_one_epoch_single_gpu_p2loc_rhc(
             model=model,
             optimizer=optimizer,
             train_loader=train_loader,
             device=device,
             epoch=epoch,
-            lr_scheduler=scheduler,
-            # warmup_scheduler=warmup_scheduler,
+            lr_scheduler= None if StepLR else scheduler,
+            warmup_scheduler=warmup_scheduler,
             use_amp=use_amp,
             scaler=scaler
         )
@@ -210,6 +217,9 @@ def main(args):
             show_images=show_images,
             use_wandb=use_wandb
         )
+        
+        if StepLR:
+            scheduler.step()
         # eval and log
         mean_mae = mae_sum / len(test_loader)
         mean_mse = math.sqrt(mse_sum / len(test_loader))
@@ -220,9 +230,10 @@ def main(args):
         checkpoint_dict = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
-                'optim_state_dict': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict()
+                'optim_state_dict': optimizer.state_dict()
             }
+        if scheduler is not None:
+            checkpoint_dict['scheduler'] = scheduler.state_dict()
         if use_amp:
             checkpoint_dict['scaler'] = scaler.state_dict()
             
@@ -244,8 +255,8 @@ def main(args):
 
         if use_wandb:
             wandb.log({'MSELoss': mean_loss})
-            wandb.log({'MAE': min(mean_mae, 300)})
-            wandb.log({'MSE': min(mean_mse, 300)})
+            wandb.log({'MAE': mean_mae})
+            wandb.log({'MSE': mean_mse})
             wandb.log({'MinMAE': min_mae})
             wandb.log({'MinMSE': min_mse})
             wandb.log({'MinEpoch': min_epoch})
@@ -320,6 +331,113 @@ def train_one_epoch_single_gpu_p2loc(model,
                     lr_scheduler.step()
             else:
                 lr_scheduler.step(epoch + step / iters)
+        
+        if not torch.isfinite(loss):
+            print('WARNING: non-finite loss, ending training !!!', loss)
+            sys.exit(1)
+             
+    return mean_loss.item()
+
+def train_one_epoch_single_gpu_p2loc_rhc(model,
+                    optimizer,
+                    train_loader,
+                    device,
+                    epoch,
+                    use_amp=False,
+                    scaler=None,
+                    lr_scheduler=None,
+                    warmup_scheduler=None):
+    model.train()
+
+    criterion = nn.MSELoss(reduction='sum').to(device)
+
+    mean_loss = torch.zeros(1).to(device)
+    mean_loss_p2 = torch.zeros(1).to(device)
+    mean_loss_p3 = torch.zeros(1).to(device)
+    mean_loss_hc_p2 = torch.zeros(1).to(device)
+    mean_loss_hc_p3 = torch.zeros(1).to(device)
+    # 打印训练进度
+    train_loader = tqdm(train_loader, file=sys.stdout)
+    iters = len(train_loader)
+    for step, (img, gt_dmap, gt_dmap_p2) in enumerate(train_loader):
+        optimizer.zero_grad()
+        img = img.to(device)
+        gt_dmap = gt_dmap.to(device)
+        gt_dmap_p2 = gt_dmap_p2.to(device)
+        if use_amp:
+            # forward propagation
+            with autocast():
+                et_dmap_p3, et_dmap_p2 = model(img)
+                # calculate loss
+                # with torch.cuda.amp.autocast(enabled=False):
+                et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
+                loss = criterion(et_dmap_p3, gt_dmap) + 0.0001 * criterion(et_dmap_p2, gt_dmap_p2)
+            scaler.scale(loss).backward()
+        else:
+            # forward propagation
+            et_dmap_p3, et_dmap_p2 = model(img)
+            # calculate loss
+            et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
+            y = 0.01
+            loss_p2 = y * criterion(et_dmap_p2, gt_dmap_p2)
+            loss_p3 = criterion(et_dmap_p3, gt_dmap)
+            eph = 0
+            # hcmode = 0 # 相对
+            hcmode = 1 # 绝对
+            if epoch >= eph:
+                gt_count = gt_dmap.data.sum()
+                et_count = et_dmap_p3.data.sum()
+                et_count_p2 = et_dmap_p2.data.sum()
+                gt_count_p2 = gt_dmap_p2.data.sum()
+                if hcmode == 0:
+                    et_count = et_count / (gt_count + 1)
+                    gt_count = gt_count / (gt_count + 1)
+                    loss_hc_p3 = criterion(et_count, gt_count)
+                elif hcmode == 1:
+                    y2 = 0
+                    y3 = 1e-3
+                    loss_hc_p2 = y * y2 * criterion(et_count_p2, gt_count_p2)
+                    loss_hc_p3 = y3 * criterion(et_count, gt_count)
+                loss = loss_p2 + loss_p3 + loss_hc_p2 + loss_hc_p3
+            else:
+                loss = loss_p2 + loss_p3
+            loss.backward()
+        # update mean losses
+        mean_loss = (mean_loss * step + loss.detach()) / (step + 1)
+        mean_loss_p2 = (mean_loss_p2 * step + loss_p2.detach()) / (step + 1)
+        mean_loss_p3 = (mean_loss_p3 * step + loss_p3.detach()) / (step + 1)
+        if epoch >=eph:
+            mean_loss_hc_p2 = (mean_loss_hc_p2 * step + loss_hc_p2.detach()) / (step + 1)
+            mean_loss_hc_p3 = (mean_loss_hc_p3 * step + loss_hc_p3.detach()) / (step + 1)
+        # 打印loss
+        train_loader.desc = "[epoch {}] loss {}, loss_p2 {}, loss_p3 {}, {} {}, {} {}".format(
+            epoch, round(mean_loss.item(), 3), round(mean_loss_p2.item(), 3), round(mean_loss_p3.item(), 3), 
+            'loss_rhc_p2' if hcmode == 0 else 'loss_ahc_p2', round(mean_loss_hc_p2.item(), 3) if epoch >= eph else 0, 
+            'loss_rhc_p3' if hcmode == 0 else 'loss_ahc_p3',round(mean_loss_hc_p3.item(), 3) if epoch >= eph else 0)
+        
+        if use_amp:
+            # scaler.unscale_(optimizer)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+            scaler.step(optimizer)
+            scale = scaler.get_scale()
+            scaler.update()
+            skip_lr_sched = (scale > scaler.get_scale())
+            
+            if lr_scheduler is not None:
+                if not skip_lr_sched:
+                    if warmup_scheduler is not None:
+                        with warmup_scheduler.dampening():
+                            lr_scheduler.step(epoch + step / iters)
+                    else:
+                        lr_scheduler.step(epoch + step / iters)
+        else:
+            optimizer.step()
+            if lr_scheduler is not None:
+                if warmup_scheduler is not None:
+                    with warmup_scheduler.dampening():
+                        lr_scheduler.step()
+                else:
+                    lr_scheduler.step()
         
         if not torch.isfinite(loss):
             print('WARNING: non-finite loss, ending training !!!', loss)

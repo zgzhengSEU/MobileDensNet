@@ -5,6 +5,8 @@ import math
 from torch import Tensor
 from typing import Optional, Callable, List
 from mmcv.cnn import ConvModule, is_norm
+from mmcv.ops import ModulatedDeformConv2dPack as DCNv2
+from mmcv.cnn import build_norm_layer, build_conv_layer
 from mmengine.model import constant_init, normal_init
 
 
@@ -338,19 +340,130 @@ class Bottleneck(nn.Module):
                  in_channels,
                  mid_channels,
                  dilation,
+                 use_dcn_mode=0,
                  norm_cfg=dict(type='BN', requires_grad=True)):
         super(Bottleneck, self).__init__()
         self.in_channels = in_channels
         self.mid_channels = mid_channels
+        self.use_dcn_mode = use_dcn_mode
+
         self.conv1 = ConvModule(
             in_channels, mid_channels, 1, norm_cfg=norm_cfg)
-        self.conv2 = ConvModule(
-            mid_channels,
-            mid_channels,
-            3,
-            padding=dilation,
-            dilation=dilation,
-            norm_cfg=norm_cfg)
+
+        if use_dcn_mode == 0:
+            self.conv2 = ConvModule(
+                mid_channels,
+                mid_channels,
+                3,
+                padding=dilation,
+                dilation=dilation,
+                norm_cfg=norm_cfg)
+        elif use_dcn_mode == 1:
+            self.conv2 = nn.Sequential(
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1]
+            )
+
+        elif use_dcn_mode == 2:
+            self.conv2 = nn.Sequential(
+                ConvModule(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    norm_cfg=norm_cfg),
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1]
+            )
+        elif use_dcn_mode == 3:
+            self.conv2 = nn.Sequential(
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                ConvModule(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    norm_cfg=norm_cfg),
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1]
+            )
+        elif use_dcn_mode == 4:
+            self.conv2 = nn.Sequential(
+                ConvModule(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    norm_cfg=norm_cfg),
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1]
+            )
+        elif use_dcn_mode == 5:
+            self.conv2 = nn.Sequential(
+                ConvModule(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    norm_cfg=norm_cfg),
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=1,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=1,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1]
+            )
         self.conv3 = ConvModule(
             mid_channels, in_channels, 1, norm_cfg=norm_cfg)
 
@@ -379,13 +492,14 @@ class REB(nn.Module):
     """
 
     def __init__(self, in_channels, out_channels, block_mid_channels,
-                 num_residual_blocks, block_dilations):
+                 num_residual_blocks, block_dilations, use_dcn_mode=0):
         super(REB, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.block_mid_channels = block_mid_channels
         self.num_residual_blocks = num_residual_blocks
         self.block_dilations = block_dilations
+        self.use_dcn_mode = use_dcn_mode
         self._init_layers()
 
     def _init_layers(self):
@@ -396,7 +510,8 @@ class REB(nn.Module):
                 Bottleneck(
                     self.out_channels,
                     self.block_mid_channels,
-                    dilation=dilation))
+                    dilation=dilation,
+                    use_dcn_mode=self.use_dcn_mode))
         self.REB_blocks = nn.Sequential(*encoder_blocks)
 
     def init_weights(self):
@@ -437,7 +552,7 @@ class ContextualModule(nn.Module):
             h, w), mode='bilinear', align_corners=True) for stage in self.scales]
         with torch.cuda.amp.autocast(enabled=False):
             weights = [self.__make_weight(feats.to(dtype=torch.float32), scale_feature.to(dtype=torch.float32)).to(dtype=feats.dtype)
-                    for scale_feature in multi_scales]
+                       for scale_feature in multi_scales]
         overall_features = [(multi_scales[0] * weights[0] + multi_scales[1]*weights[1] + multi_scales[2] *
                              weights[2] + multi_scales[3] * weights[3]) / (weights[0] + weights[1] + weights[2] + weights[3])] + [feats]
         bottle = self.bottleneck(torch.cat(overall_features, 1))
@@ -455,9 +570,9 @@ class ContextualModule(nn.Module):
 
 
 class GhostNetV2P3_RFB_CAN_REB(nn.Module):
-    def __init__(self, FEM_kernel_size=1, use_dilation=False, use_CAN=True, use_se=True, width=1.0, block=GhostBottleneckV2, args=None):
+    def __init__(self, FEM_kernel_size=1, use_dilation_in_FEM=False, use_CAN=True, use_se=True, use_dcn_mode=0, width=1.0, block=GhostBottleneckV2, args=None):
         super(GhostNetV2P3_RFB_CAN_REB, self).__init__()
-        
+
         self.cfgs = [
             # k, t, c, SE, s
             # ====== p1 ==============
@@ -491,6 +606,7 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
              [5, 960, 160, 0, 1],
              [5, 960, 160, 0.25 if use_se else 0, 1]]]  # 8
 
+        self.use_dcn_mode = use_dcn_mode
         self.use_CAN = use_CAN
         # building first layer
         output_channel = _make_divisible(16 * width, 4)
@@ -516,7 +632,7 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
             stages.append(nn.Sequential(*layers))
 
         self.blocks = nn.Sequential(*stages)
-        
+
         if self.use_CAN:
             self.ContextualModule = ContextualModule(in_channels=_make_divisible(
                 112 * width, 4), out_channels=_make_divisible(112 * width, 4))
@@ -528,16 +644,16 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
         self.P4_RFB = RFB(in_planes=_make_divisible(
             160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
         self.P2_REB_out = REB(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
-            24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+            24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8], use_dcn_mode=use_dcn_mode)
         self.P3_REB_out = REB(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(
-            112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8])
+            112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8], use_dcn_mode=use_dcn_mode)
         # building last layer
         self.P2_FEM = FEM(in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), in_as_mid=True,
-                          mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+                          mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation_in_FEM)
         self.P3_FEM = FEM(in_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), mid_channels=_make_divisible(40 * width, 4),
-                          out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+                          out_channels=_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation_in_FEM)
         self.P4_FEM = FEM(in_channels=_make_divisible(160 * width, 4), mid_channels=_make_divisible(80 * width, 4),
-                          out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation)
+                          out_channels=_make_divisible(40 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation_in_FEM)
         self.output_layer_p3 = ConvModule(_make_divisible(
             112 * width, 4) + _make_divisible(40 * width, 4), 1, kernel_size=1, norm_cfg=dict(type='BN', requires_grad=True))
         self.output_layer_p2 = ConvModule(
@@ -571,13 +687,13 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
 
         p2_out = self.output_layer_p2(self.P2_REB_out(p2))
         p3_out = self.output_layer_p3(self.P3_REB_out(p3))
-        
+
         return p3_out, p2_out
 
 
 if __name__ == '__main__':
     model = GhostNetV2P3_RFB_CAN_REB(
-        use_dilation=False, width=1.6).to('cuda')
+        use_dilation_in_FEM=False, use_CAN=True, use_se=True, use_dcn_mode=4, width=1.6).to('cuda')
     # model = GhostNetV2P3_RFB(use_dilation=False, width=1.6).to('cuda')
     # checkpoint_path = '/home/gp.sc.cc.tohoku.ac.jp/duanct/openmmlab/GhostDensNet/checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar'
     # load_checkpoint(model, checkpoint_path, strict=False, map_location='cuda')

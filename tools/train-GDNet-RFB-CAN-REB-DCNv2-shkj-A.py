@@ -77,7 +77,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online"
-    wandb_name='GhostNetV2P3_RFB_CAN_REB'
+    wandb_name='GhostNetV2P3_RFB_CAN_REB_DCNv2'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"
@@ -140,7 +140,7 @@ def main(args):
     train_loader=DataLoader(train_dataset,batch_size=1,shuffle=True, num_workers=train_num_workers, pin_memory=True)
     test_loader=DataLoader(test_dataset,batch_size=1,shuffle=False, num_workers=test_num_workers, pin_memory=True)
     # ========================================= model =================================================
-    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True).to(device)
+    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True, use_dcn_mode=2).to(device)
 
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
@@ -174,12 +174,15 @@ def main(args):
     # ===================================== optimizer ===========================================
     if not resume:
         pg = [p for p in model.parameters() if p.requires_grad]
-        # num_steps = len(train_loader) * epochs
-        # optimizer = optim.AdamW(pg, lr=lr)
-        optimizer = optim.SGD(pg, lr=lr, momentum=0.95, weight_decay=5e-4)
-        scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
-        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=5)
+        num_steps = len(train_loader) * epochs
+        # optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
+        optimizer = optim.AdamW(pg, lr=lr)
+        # optimizer = optim.SGD(pg, lr=lr, momentum=0.95, weight_decay=5e-4)
+        scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=25, T_mult=1)
+        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=50)
+        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
         # warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
+        warmup_scheduler = None
         if use_amp:
             scaler = GradScaler()
         else:
@@ -197,7 +200,7 @@ def main(args):
             device=device,
             epoch=epoch,
             lr_scheduler=scheduler,
-            # warmup_scheduler=warmup_scheduler,
+            warmup_scheduler=warmup_scheduler,
             use_amp=use_amp,
             scaler=scaler
         )
@@ -291,6 +294,83 @@ def train_one_epoch_single_gpu_p2loc(model,
             # calculate loss
             et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
             loss = criterion(et_dmap_p3, gt_dmap) + 0.0001 * criterion(et_dmap_p2, gt_dmap_p2)
+            loss.backward()
+        # update mean losses
+        mean_loss = (mean_loss * step + loss.detach()) / (step + 1)
+        
+        # 打印loss
+        train_loader.desc = "[epoch {}] mean loss {}".format(
+            epoch, round(mean_loss.item(), 3))
+        
+        if use_amp:
+            # scaler.unscale_(optimizer)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+            scaler.step(optimizer)
+            scale = scaler.get_scale()
+            scaler.update()
+            skip_lr_sched = (scale > scaler.get_scale())
+            
+            if not skip_lr_sched:
+                if warmup_scheduler is not None:
+                    with warmup_scheduler.dampening():
+                        lr_scheduler.step(epoch + step / iters)
+                else:
+                    lr_scheduler.step(epoch + step / iters)
+        else:
+            optimizer.step()
+            if warmup_scheduler is not None:
+                with warmup_scheduler.dampening():
+                    lr_scheduler.step()
+            else:
+                lr_scheduler.step(epoch + step / iters)
+        
+        if not torch.isfinite(loss):
+            print('WARNING: non-finite loss, ending training !!!', loss)
+            sys.exit(1)
+             
+    return mean_loss.item()
+
+def train_one_epoch_single_gpu_p2loc_rhc(model,
+                    optimizer,
+                    train_loader,
+                    device,
+                    epoch,
+                    use_amp=False,
+                    scaler=None,
+                    lr_scheduler=None,
+                    warmup_scheduler=None):
+    model.train()
+
+    criterion = nn.MSELoss(reduction='sum').to(device)
+
+    mean_loss = torch.zeros(1).to(device)
+
+    # 打印训练进度
+    train_loader = tqdm(train_loader, file=sys.stdout)
+    iters = len(train_loader)
+    for step, (img, gt_dmap, gt_dmap_p2) in enumerate(train_loader):
+        optimizer.zero_grad()
+        img = img.to(device)
+        gt_dmap = gt_dmap.to(device)
+        gt_dmap_p2 = gt_dmap_p2.to(device)
+        if use_amp:
+            # forward propagation
+            with autocast():
+                et_dmap_p3, et_dmap_p2 = model(img)
+                # calculate loss
+                # with torch.cuda.amp.autocast(enabled=False):
+                et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
+                loss = criterion(et_dmap_p3, gt_dmap) + 0.0001 * criterion(et_dmap_p2, gt_dmap_p2)
+            scaler.scale(loss).backward()
+        else:
+            # forward propagation
+            et_dmap_p3, et_dmap_p2 = model(img)
+            # calculate loss
+            et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
+            gt_count = gt_dmap.data.sum()
+            et_count = et_dmap_p3.data.sum() / (gt_count + 1)
+            gt_count = gt_count / (gt_count + 1)
+            loss = criterion(et_dmap_p3, gt_dmap) + 0.0001 * criterion(et_dmap_p2, gt_dmap_p2) + criterion(et_count, gt_count)
             loss.backward()
         # update mean losses
         mean_loss = (mean_loss * step + loss.detach()) / (step + 1)
