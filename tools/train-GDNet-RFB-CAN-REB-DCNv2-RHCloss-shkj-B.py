@@ -78,7 +78,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online" if args.online else 'offline'
-    wandb_name='train-GDNet-RFB-CAN-REB-DCNv2-RHCloss'
+    wandb_name='train-GDNet-OCRFB-CAN-REB-DCNv2-RHCloss'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"

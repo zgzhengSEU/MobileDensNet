@@ -270,6 +270,87 @@ class RFB(nn.Module):
         return out
 
 
+class OCRFB(nn.Module):
+
+    def __init__(self, in_planes, out_planes, stride=1, scale=0.1):
+        super(OCRFB, self).__init__()
+        self.scale = scale
+        self.out_channels = out_planes
+        self.inter_planes = in_planes // 4
+
+        self.branch0 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=1, dilation=1, relu=False)
+        )
+        self.branch1 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes, self.inter_planes,
+                      kernel_size=(3, 1), stride=1, padding=(1, 0)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=3, dilation=3, relu=False)
+        )
+        self.branch2 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes, self.inter_planes,
+                      kernel_size=(1, 3), stride=stride, padding=(0, 1)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=3, dilation=3, relu=False)
+        )
+        self.branch3 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes //
+                      2, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes//2, (self.inter_planes//4)*3,
+                      kernel_size=(1, 3), stride=1, padding=(0, 1)),
+            BasicConv((self.inter_planes//4)*3, self.inter_planes,
+                      kernel_size=(3, 1), stride=stride, padding=(1, 0)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=5, dilation=5, relu=False)
+        )
+        self.branch4 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes, self.inter_planes,
+                      kernel_size=(5, 1), stride=1, padding=(2, 0)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=5, dilation=5, relu=False)
+        )
+        self.branch5 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes, self.inter_planes,
+                      kernel_size=(1, 5), stride=stride, padding=(0, 2)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=5, dilation=5, relu=False)
+        )
+        # self.branch6 = nn.Sequential(
+        #     BasicConv(in_planes, self.inter_planes //
+        #               2, kernel_size=1, stride=1),
+        #     BasicConv(self.inter_planes//2, (self.inter_planes//4)*3,
+        #               kernel_size=(1, 5), stride=1, padding=(0, 2)),
+        #     BasicConv((self.inter_planes//4)*3, self.inter_planes,
+        #               kernel_size=(5, 1), stride=stride, padding=(2, 0)),
+        #     BasicSepConv(self.inter_planes, kernel_size=3,
+        #                  stride=1, padding=7, dilation=7, relu=False)
+        # )
+        self.ConvLinear = BasicConv(
+            6*self.inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
+        self.relu = nn.ReLU(inplace=False)
+
+    def forward(self, x):
+        x0 = self.branch0(x)
+        x1 = self.branch1(x)
+        x2 = self.branch2(x)
+        x3 = self.branch3(x)
+        x4 = self.branch3(x)
+        x5 = self.branch3(x)
+        # x6 = self.branch6(x)
+        
+        out = torch.cat((x0, x1, x2, x3, x4, x5), 1)
+        out = self.ConvLinear(out)
+        out = out*self.scale + x
+        out = self.relu(out)
+
+        return out
+
 class FEM(nn.Module):
     def __init__(self,
                  in_channels,
@@ -637,11 +718,11 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
             self.ContextualModule = ContextualModule(in_channels=_make_divisible(
                 112 * width, 4), out_channels=_make_divisible(112 * width, 4))
 
-        self.P2_RFB = RFB(in_planes=_make_divisible(
+        self.P2_RFB = OCRFB(in_planes=_make_divisible(
             24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
-        self.P3_RFB = RFB(in_planes=_make_divisible(
+        self.P3_RFB = OCRFB(in_planes=_make_divisible(
             112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
-        self.P4_RFB = RFB(in_planes=_make_divisible(
+        self.P4_RFB = OCRFB(in_planes=_make_divisible(
             160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
         self.P2_REB_out = REB(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
             24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8], use_dcn_mode=use_dcn_mode)

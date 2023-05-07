@@ -31,7 +31,7 @@ from model import CrowdDataset, CrowdDataset_p2
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--epochs', type=int, default=150)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--amp', action='store_true', default=False)
     parser.add_argument('--wandb', action='store_true', default=True)
@@ -50,10 +50,10 @@ def main(args):
     if torch.cuda.is_available() is False:
         raise EnvironmentError("not find GPU device for training.")
     # ===================== DataPath =========================
-    datatype = 'ShanghaiTech_part_A'
+    # datatype = 'ShanghaiTech_part_A'
     # datatype = 'ShanghaiTech_part_B'
     # datatype = 'VisDrone2020-CC'
-    # datatype = 'VisDrone'
+    datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
         train_image_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/images'
         train_dmap_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/ground-truth'
@@ -78,7 +78,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online" if args.online else 'offline'
-    wandb_name='train-GDNet-OCRFB-CAN-REB-DCNv2-RHCloss'
+    wandb_name='train-GDNet-RFB-CAN-REB-DCNv2-RHCloss'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"
@@ -141,7 +141,7 @@ def main(args):
     train_loader=DataLoader(train_dataset,batch_size=1,shuffle=True, num_workers=train_num_workers, pin_memory=True)
     test_loader=DataLoader(test_dataset,batch_size=1,shuffle=False, num_workers=test_num_workers, pin_memory=True)
     # ========================================= model =================================================
-    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True, use_dcn_mode=5).to(device)
+    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True, use_dcn_mode=0).to(device)
 
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
@@ -176,17 +176,17 @@ def main(args):
     if not resume:
         pg = [p for p in model.parameters() if p.requires_grad]
         num_steps = len(train_loader) * epochs
-        # optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
-        optimizer = optim.AdamW(pg, lr=lr)
+        optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
+        # optimizer = optim.AdamW(pg, lr=lr)
         # optimizer = optim.SGD(pg, lr=lr, momentum=0.95, weight_decay=5e-4)
         # scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=25, T_mult=1)
         # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=50)
-        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
-        scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100, 150, 200, 250], gamma=0.8)
-        StepLR = True
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+        # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[25, 50, 75, 100, 125], gamma=0.8)
+        StepLR = False
         # scheduler = None
-        # warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
-        warmup_scheduler = None
+        warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
+        # warmup_scheduler = None
         if use_amp:
             scaler = GradScaler()
         else:
@@ -378,10 +378,10 @@ def train_one_epoch_single_gpu_p2loc_rhc(model,
             et_dmap_p3, et_dmap_p2 = model(img)
             # calculate loss
             et_dmap_p2 = F.interpolate(et_dmap_p2, size=(gt_dmap_p2.shape[2], gt_dmap_p2.shape[3]), mode='bilinear', align_corners=True)
-            y = 0.01
+            y = 0.0001
             loss_p2 = y * criterion(et_dmap_p2, gt_dmap_p2)
             loss_p3 = criterion(et_dmap_p3, gt_dmap)
-            eph = 0
+            eph = 50
             # hcmode = 0 # 相对
             hcmode = 1 # 绝对
             if epoch >= eph:
@@ -414,6 +414,9 @@ def train_one_epoch_single_gpu_p2loc_rhc(model,
             epoch, round(mean_loss.item(), 3), round(mean_loss_p2.item(), 3), round(mean_loss_p3.item(), 3), 
             'loss_rhc_p2' if hcmode == 0 else 'loss_ahc_p2', round(mean_loss_hc_p2.item(), 3) if epoch >= eph else 0, 
             'loss_rhc_p3' if hcmode == 0 else 'loss_ahc_p3',round(mean_loss_hc_p3.item(), 3) if epoch >= eph else 0)
+        
+        
+        torch.nn.utils.clip_grad_norm_(parameters=model.parameters(), max_norm=10, norm_type=2)
         
         if use_amp:
             # scaler.unscale_(optimizer)
