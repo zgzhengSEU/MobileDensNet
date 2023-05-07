@@ -141,7 +141,7 @@ def main(args):
     train_loader=DataLoader(train_dataset,batch_size=1,shuffle=True, num_workers=train_num_workers, pin_memory=True)
     test_loader=DataLoader(test_dataset,batch_size=1,shuffle=False, num_workers=test_num_workers, pin_memory=True)
     # ========================================= model =================================================
-    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True, use_dcn_mode=5).to(device)
+    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True, use_dcn_mode=2, gamma=True).to(device)
 
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)

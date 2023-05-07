@@ -272,9 +272,9 @@ class RFB(nn.Module):
 
 class OCRFB(nn.Module):
 
-    def __init__(self, in_planes, out_planes, stride=1, scale=0.1):
+    def __init__(self, in_planes, out_planes, stride=1, scale=0.1, gamma=False):
         super(OCRFB, self).__init__()
-        self.scale = scale
+        self.scale = nn.Parameter(torch.ones(1) * scale) if gamma else scale
         self.out_channels = out_planes
         self.inter_planes = in_planes // 4
 
@@ -321,18 +321,18 @@ class OCRFB(nn.Module):
             BasicSepConv(self.inter_planes, kernel_size=3,
                          stride=1, padding=5, dilation=5, relu=False)
         )
-        # self.branch6 = nn.Sequential(
-        #     BasicConv(in_planes, self.inter_planes //
-        #               2, kernel_size=1, stride=1),
-        #     BasicConv(self.inter_planes//2, (self.inter_planes//4)*3,
-        #               kernel_size=(1, 5), stride=1, padding=(0, 2)),
-        #     BasicConv((self.inter_planes//4)*3, self.inter_planes,
-        #               kernel_size=(5, 1), stride=stride, padding=(2, 0)),
-        #     BasicSepConv(self.inter_planes, kernel_size=3,
-        #                  stride=1, padding=7, dilation=7, relu=False)
-        # )
+        self.branch6 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes //
+                      2, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes//2, (self.inter_planes//4)*3,
+                      kernel_size=(1, 5), stride=1, padding=(0, 2)),
+            BasicConv((self.inter_planes//4)*3, self.inter_planes,
+                      kernel_size=(5, 1), stride=stride, padding=(2, 0)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=7, dilation=7, relu=False)
+        )
         self.ConvLinear = BasicConv(
-            6*self.inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
+            7*self.inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
         self.relu = nn.ReLU(inplace=False)
 
     def forward(self, x):
@@ -342,9 +342,9 @@ class OCRFB(nn.Module):
         x3 = self.branch3(x)
         x4 = self.branch3(x)
         x5 = self.branch3(x)
-        # x6 = self.branch6(x)
+        x6 = self.branch6(x)
         
-        out = torch.cat((x0, x1, x2, x3, x4, x5), 1)
+        out = torch.cat((x0, x1, x2, x3, x4, x5, x6), 1)
         out = self.ConvLinear(out)
         out = out*self.scale + x
         out = self.relu(out)
@@ -651,7 +651,7 @@ class ContextualModule(nn.Module):
 
 
 class GhostNetV2P3_RFB_CAN_REB(nn.Module):
-    def __init__(self, FEM_kernel_size=1, use_dilation_in_FEM=False, use_CAN=True, use_se=True, use_dcn_mode=0, width=1.0, block=GhostBottleneckV2, args=None):
+    def __init__(self, FEM_kernel_size=1, use_dilation_in_FEM=False, use_CAN=True, use_se=True, use_dcn_mode=0, gamma=False, width=1.0, block=GhostBottleneckV2, args=None):
         super(GhostNetV2P3_RFB_CAN_REB, self).__init__()
 
         self.cfgs = [
@@ -719,11 +719,11 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
                 112 * width, 4), out_channels=_make_divisible(112 * width, 4))
 
         self.P2_RFB = OCRFB(in_planes=_make_divisible(
-            24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0)
+            24 * width, 4), out_planes=_make_divisible(24 * width, 4), scale=1.0, gamma=gamma)
         self.P3_RFB = OCRFB(in_planes=_make_divisible(
-            112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0)
+            112 * width, 4), out_planes=_make_divisible(112 * width, 4), scale=1.0, gamma=gamma)
         self.P4_RFB = OCRFB(in_planes=_make_divisible(
-            160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0)
+            160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0, gamma=gamma)
         self.P2_REB_out = REB(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
             24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8], use_dcn_mode=use_dcn_mode)
         self.P3_REB_out = REB(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(
