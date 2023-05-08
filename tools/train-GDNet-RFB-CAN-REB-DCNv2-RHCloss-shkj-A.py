@@ -78,7 +78,7 @@ def main(args):
     wandb_project="Density"
     wandb_group=datatype
     wandb_mode="online" if args.online else 'offline'
-    wandb_name='train-GDNet-OCRFB-CAN-REB-DCNv2-RHCloss'
+    wandb_name='train-GDNet-OCRFB-PFAM-RFPEM-RHCloss'
     # ===================== configuration ======================
     init_checkpoint = args.init_checkpoint
     temp_init_checkpoint_path = "checkpoints"
@@ -141,7 +141,7 @@ def main(args):
     train_loader=DataLoader(train_dataset,batch_size=1,shuffle=True, num_workers=train_num_workers, pin_memory=True)
     test_loader=DataLoader(test_dataset,batch_size=1,shuffle=False, num_workers=test_num_workers, pin_memory=True)
     # ========================================= model =================================================
-    model = USE_MODEL(width=1.6, use_se=True, use_CAN=True, use_dcn_mode=2, gamma=True).to(device)
+    model = USE_MODEL(width=1.6, use_se=True, use_CAN=False, use_dcn_mode=1, gamma=True).to(device)
 
     if resume:
         resume_load_checkpoint = torch.load(resume_checkpoint, map_location=device)
@@ -176,17 +176,17 @@ def main(args):
     if not resume:
         pg = [p for p in model.parameters() if p.requires_grad]
         num_steps = len(train_loader) * epochs
-        # optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
-        optimizer = optim.AdamW(pg, lr=lr)
+        optimizer = optim.AdamW(pg, lr=lr, betas=(0.9, 0.999), weight_decay=1e-4)
+        # optimizer = optim.AdamW(pg, lr=lr)
         # optimizer = optim.SGD(pg, lr=lr, momentum=0.95, weight_decay=5e-4)
         # scheduler = lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=25, T_mult=1)
         # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=50)
-        # scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
-        scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100, 150, 200, 250], gamma=0.8)
-        StepLR = True
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_steps)
+        # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[50, 100, 150, 200, 250], gamma=0.8)
+        StepLR = False
         # scheduler = None
-        # warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
-        warmup_scheduler = None
+        warmup_scheduler = warmup.UntunedExponentialWarmup(optimizer)
+        # warmup_scheduler = None
         if use_amp:
             scaler = GradScaler()
         else:

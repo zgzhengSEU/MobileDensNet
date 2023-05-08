@@ -305,7 +305,7 @@ class OCRFB(nn.Module):
             BasicConv((self.inter_planes//4)*3, self.inter_planes,
                       kernel_size=(3, 1), stride=stride, padding=(1, 0)),
             BasicSepConv(self.inter_planes, kernel_size=3,
-                         stride=1, padding=5, dilation=5, relu=False)
+                         stride=1, padding=3, dilation=3, relu=False)
         )
         self.branch4 = nn.Sequential(
             BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
@@ -329,7 +329,7 @@ class OCRFB(nn.Module):
             BasicConv((self.inter_planes//4)*3, self.inter_planes,
                       kernel_size=(5, 1), stride=stride, padding=(2, 0)),
             BasicSepConv(self.inter_planes, kernel_size=3,
-                         stride=1, padding=7, dilation=7, relu=False)
+                         stride=1, padding=5, dilation=5, relu=False)
         )
         self.ConvLinear = BasicConv(
             7*self.inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
@@ -358,7 +358,9 @@ class FEM(nn.Module):
                  out_channels,
                  in_as_mid=False,
                  kernel_size=1,
-                 use_dilation=False):
+                 use_dilation=False,
+                 act_cfg=dict(type='HSwish', inplace=True),
+                 norm_cfg=dict(type='BN', requires_grad=True)):
         super().__init__()
         # same padding
         if use_dilation:
@@ -371,21 +373,21 @@ class FEM(nn.Module):
         else:
             pad = 0
 
-        self.conv_stem = nn.Conv2d(in_channels, mid_channels if in_as_mid else in_channels,
-                                   kernel_size=kernel_size, padding=pad, dilation=dilation)
+        self.conv_stem = ConvModule(in_channels, mid_channels if in_as_mid else in_channels,
+                                   kernel_size=kernel_size, padding=pad, dilation=dilation, act_cfg=act_cfg, norm_cfg=norm_cfg)
 
         self.maxpool1 = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
-        self.conv1 = nn.Conv2d(
-            mid_channels if in_as_mid else in_channels, mid_channels, kernel_size=kernel_size, padding=pad,  dilation=dilation)
+        self.conv1 = ConvModule(
+            mid_channels if in_as_mid else in_channels, mid_channels, kernel_size=kernel_size, padding=pad,  dilation=dilation, act_cfg=act_cfg, norm_cfg=norm_cfg)
         self.maxpool2 = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
-        self.conv2 = nn.Conv2d(mid_channels, mid_channels,
-                               kernel_size=kernel_size, padding=pad,  dilation=dilation)
+        self.conv2 = ConvModule(mid_channels, mid_channels,
+                               kernel_size=kernel_size, padding=pad,  dilation=dilation, act_cfg=act_cfg, norm_cfg=norm_cfg)
         self.maxpool3 = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
-        self.conv3 = nn.Conv2d(mid_channels, mid_channels,
-                               kernel_size=kernel_size, padding=pad,  dilation=dilation)
+        self.conv3 = ConvModule(mid_channels, mid_channels,
+                               kernel_size=kernel_size, padding=pad,  dilation=dilation, act_cfg=act_cfg, norm_cfg=norm_cfg)
 
-        self.final_conv = nn.Conv2d(
-            mid_channels * 3 + (mid_channels if in_as_mid else in_channels), out_channels, kernel_size=kernel_size, padding=pad,  dilation=dilation)
+        self.final_conv = ConvModule(
+            mid_channels * 3 + (mid_channels if in_as_mid else in_channels), out_channels, kernel_size=kernel_size, padding=pad,  dilation=dilation, act_cfg=act_cfg, norm_cfg=norm_cfg)
 
     def forward(self, x):
         shortcut = self.conv_stem(x)
@@ -422,14 +424,15 @@ class Bottleneck(nn.Module):
                  mid_channels,
                  dilation,
                  use_dcn_mode=0,
+                 act_cfg=dict(type='HSwish', inplace=True),
                  norm_cfg=dict(type='BN', requires_grad=True)):
         super(Bottleneck, self).__init__()
         self.in_channels = in_channels
         self.mid_channels = mid_channels
         self.use_dcn_mode = use_dcn_mode
-
+        self.scale = nn.Parameter(torch.ones(1))
         self.conv1 = ConvModule(
-            in_channels, mid_channels, 1, norm_cfg=norm_cfg)
+            in_channels, mid_channels, 1, act_cfg=act_cfg, norm_cfg=norm_cfg)
 
         if use_dcn_mode == 0:
             self.conv2 = ConvModule(
@@ -438,6 +441,7 @@ class Bottleneck(nn.Module):
                 3,
                 padding=dilation,
                 dilation=dilation,
+                act_cfg=act_cfg,
                 norm_cfg=norm_cfg)
         elif use_dcn_mode == 1:
             self.conv2 = nn.Sequential(
@@ -448,9 +452,9 @@ class Bottleneck(nn.Module):
                     padding=dilation,
                     dilation=dilation,
                     bias=False),
-                build_norm_layer(norm_cfg, mid_channels)[1]
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True)
             )
-
         elif use_dcn_mode == 2:
             self.conv2 = nn.Sequential(
                 ConvModule(
@@ -459,6 +463,7 @@ class Bottleneck(nn.Module):
                     3,
                     padding=dilation,
                     dilation=dilation,
+                    act_cfg=act_cfg,
                     norm_cfg=norm_cfg),
                 DCNv2(
                     mid_channels,
@@ -467,7 +472,8 @@ class Bottleneck(nn.Module):
                     padding=dilation,
                     dilation=dilation,
                     bias=False),
-                build_norm_layer(norm_cfg, mid_channels)[1]
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True)
             )
         elif use_dcn_mode == 3:
             self.conv2 = nn.Sequential(
@@ -485,6 +491,7 @@ class Bottleneck(nn.Module):
                     3,
                     padding=dilation,
                     dilation=dilation,
+                    act_cfg=act_cfg,
                     norm_cfg=norm_cfg),
                 DCNv2(
                     mid_channels,
@@ -503,6 +510,7 @@ class Bottleneck(nn.Module):
                     3,
                     padding=dilation,
                     dilation=dilation,
+                    act_cfg=act_cfg,
                     norm_cfg=norm_cfg),
                 DCNv2(
                     mid_channels,
@@ -512,6 +520,7 @@ class Bottleneck(nn.Module):
                     dilation=dilation,
                     bias=False),
                 build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True),
                 DCNv2(
                     mid_channels,
                     mid_channels,
@@ -519,7 +528,8 @@ class Bottleneck(nn.Module):
                     padding=dilation,
                     dilation=dilation,
                     bias=False),
-                build_norm_layer(norm_cfg, mid_channels)[1]
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True)
             )
         elif use_dcn_mode == 5:
             self.conv2 = nn.Sequential(
@@ -529,6 +539,7 @@ class Bottleneck(nn.Module):
                     3,
                     padding=dilation,
                     dilation=dilation,
+                    act_cfg=act_cfg,
                     norm_cfg=norm_cfg),
                 DCNv2(
                     mid_channels,
@@ -537,23 +548,67 @@ class Bottleneck(nn.Module):
                     padding=1,
                     bias=False),
                 build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True),
                 DCNv2(
                     mid_channels,
                     mid_channels,
                     3,
                     padding=1,
                     bias=False),
-                build_norm_layer(norm_cfg, mid_channels)[1]
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True)
             )
+        elif use_dcn_mode == 6:
+            self.conv2 = nn.Sequential(
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True),
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True)
+            )
+        elif use_dcn_mode == 7:
+            self.conv2 = nn.Sequential(
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=dilation,
+                    dilation=dilation,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True),
+                DCNv2(
+                    mid_channels,
+                    mid_channels,
+                    3,
+                    padding=1,
+                    bias=False),
+                build_norm_layer(norm_cfg, mid_channels)[1],
+                nn.Hardswish(inplace=True)
+            )   
+        
         self.conv3 = ConvModule(
-            mid_channels, in_channels, 1, norm_cfg=norm_cfg)
+            mid_channels, in_channels, 1, act_cfg=act_cfg, norm_cfg=norm_cfg)
 
     def forward(self, x):
         identity = x
         out = self.conv1(x)
         out = self.conv2(out)
         out = self.conv3(out)
-        out = out + identity
+        out = out * self.scale + identity
         return out
 
 
@@ -725,7 +780,7 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
         self.P4_RFB = OCRFB(in_planes=_make_divisible(
             160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0, gamma=gamma)
         self.P2_REB_out = REB(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
-            24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8], use_dcn_mode=use_dcn_mode)
+            24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[8, 6, 4, 2], use_dcn_mode=use_dcn_mode)
         self.P3_REB_out = REB(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(
             112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8], use_dcn_mode=use_dcn_mode)
         # building last layer
@@ -774,7 +829,7 @@ class GhostNetV2P3_RFB_CAN_REB(nn.Module):
 
 if __name__ == '__main__':
     model = GhostNetV2P3_RFB_CAN_REB(
-        use_dilation_in_FEM=False, use_CAN=True, use_se=True, use_dcn_mode=4, width=1.6).to('cuda')
+        use_dilation_in_FEM=False, use_CAN=False, use_se=True, use_dcn_mode=1, width=1.6).to('cuda')
     # model = GhostNetV2P3_RFB(use_dilation=False, width=1.6).to('cuda')
     # checkpoint_path = '/home/gp.sc.cc.tohoku.ac.jp/duanct/openmmlab/GhostDensNet/checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar'
     # load_checkpoint(model, checkpoint_path, strict=False, map_location='cuda')
