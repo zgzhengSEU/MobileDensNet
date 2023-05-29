@@ -4,7 +4,7 @@ import copy, cv2
 import numpy as np
 from tqdm import tqdm
 from plot_utils import overlay_func, overlay_bbox_img
-from eval_utils import resize_bbox_to_original, wrap_initial_result, results2json, coco_eval, nms, class_wise_nms, py_cpu_softnms, soft_nms_pytorch, py_soft_nms
+from eval_utils import resize_bbox_to_original, wrap_initial_result, results2json, coco_eval, nms, class_wise_nms
 import argparse
 from pycocotools.coco import COCO
 
@@ -40,7 +40,7 @@ def parse_args():
                         help='Threshold defined to select the cropped region')
     parser.add_argument('--iou_threshold', type=float, default=0.7,
                         help='Iou Threshold defined to filter out bbox, recommend val by mmdetection: 0.7')
-    parser.add_argument('--TopN', type=int, default=5000,
+    parser.add_argument('--TopN', type=int, default=500,
                         help='Only keep TopN bboxes with highest score, default value 500, '
                              'enforced by visiondrone competition')
     parser.add_argument('--show', type=bool, default=False, help='Need to keep original image?')
@@ -64,9 +64,9 @@ if __name__ == "__main__":
     img_path = os.path.join(folder_name, "images", 'val')
     dens_path = os.path.join(folder_name, "images", 'crop_val')
     img_gt_file = os.path.join(folder_name, "annotations", "val.json")
-    img_detection_file = os.path.join(folder_name,'detect_json',"yolov7t-original-val.bbox.json")
+    img_detection_file = os.path.join(folder_name,'detect_json',"cascadercnn-train-original-originalval.bbox.json")
     dens_gt_file = os.path.join(folder_name, "annotations", "singledensval.json")
-    dens_detection_file = os.path.join(folder_name,'detect_json',"yolov7t-densval.bbox.json")
+    dens_detection_file = os.path.join(folder_name,'detect_json',"cascadercnn-train-original-densval.bbox.json")
     output_file = os.path.join(folder_name, "detect_json", "final_fusion_result")
 
     # use coco api to retrieve detection result.
@@ -220,45 +220,40 @@ if __name__ == "__main__":
     print("start NMS")
     iou_threshold = args.iou_threshold
     TopN = args.TopN
-    for i in tqdm(cocoGt_global.getImgIds(), total=len(img_list)):
-        current_nms_target = img_fusion_result_collecter[i - 1]
-        global_img = cocoDt_global.loadImgs(i)
-        img_name = global_img[0]["file_name"]
-        nms_preprocess = wrap_initial_result(current_nms_target)
-        length_pre, length_after = len(current_nms_target), 0
-        keep = class_wise_nms(nms_preprocess, iou_threshold, TopN)
-        class_wise_nms_result = [current_nms_target[i] for i in keep]
-        
-        final_detection_result.extend(class_wise_nms_result)
-        final_nms_result = class_wise_nms_result
-        overlay_func(os.path.join(img_path, img_name), final_nms_result,
-                     classList, truncate_threshold, exclude_region=None, show=False)
-        
     # for i in tqdm(cocoGt_global.getImgIds(), total=len(img_list)):
     #     current_nms_target = img_fusion_result_collecter[i - 1]
     #     global_img = cocoDt_global.loadImgs(i)
     #     img_name = global_img[0]["file_name"]
     #     nms_preprocess = wrap_initial_result(current_nms_target)
-        
     #     length_pre, length_after = len(current_nms_target), 0
-        
-    #     # keep = class_wise_nms(nms_preprocess, iou_threshold, TopN)
-    #     keep = nms(nms_preprocess, iou_threshold)
-        
-    #     # keep = py_cpu_softnms(nms_preprocess, Nt=0.3, thresh=0.000, method=3)
-    #     # keep = py_soft_nms(nms_preprocess, method='gaussian', iou_thr=0.7, sigma=0.8, score_thr=0.01)
-    #     assert len(keep) == len(set(keep)), "Find duplicate in NMS operation"
-    #     final_det = [current_nms_target[j] for j in keep]
-    #     final_detection_result.extend(final_det)
-        
-    #     # class_wise_nms_result = [current_nms_target[i] for i in keep]
-    #     # final_detection_result.extend(class_wise_nms_result)
-    #     # final_nms_result = class_wise_nms_result
-    #     final_nms_result = final_det
+    #     keep = class_wise_nms(nms_preprocess, iou_threshold, TopN)
+    #     class_wise_nms_result = [current_nms_target[i] for i in keep]
+    #     final_detection_result.extend(class_wise_nms_result)
+    #     final_nms_result = class_wise_nms_result
     #     overlay_func(os.path.join(img_path, img_name), final_nms_result,
     #                  classList, truncate_threshold, exclude_region=None, show=False)
-    
-    
+
+    for i in tqdm(cocoGt_global.getImgIds(), total=len(img_list)):
+        current_nms_target = img_fusion_result_collecter[i - 1]
+        global_img = cocoDt_global.loadImgs(i)
+        img_name = global_img[0]["file_name"]
+        nms_preprocess = wrap_initial_result(current_nms_target)
+        
+        length_pre, length_after = len(current_nms_target), 0
+        
+        # keep = class_wise_nms(nms_preprocess, iou_threshold, TopN)
+        keep = nms(nms_preprocess, iou_threshold)
+        assert len(keep) == len(set(keep)), "Find duplicate in NMS operation"
+        final_det = [current_nms_target[j] for j in keep]
+        final_detection_result.extend(final_det)
+        
+        # class_wise_nms_result = [current_nms_target[i] for i in keep]
+        # final_detection_result.extend(class_wise_nms_result)
+        # final_nms_result = class_wise_nms_result
+        final_nms_result = final_det
+        overlay_func(os.path.join(img_path, img_name), final_nms_result,
+                     classList, truncate_threshold, exclude_region=None, show=False)
+
     # Finally, we export fusion detection result to indicated json files, then evaluate it (if not inference)
     # 转成 COCO 检测结果文件
     results2json(final_detection_result, out_file=output_file)

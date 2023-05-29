@@ -25,14 +25,14 @@ print(f'[work_dis: {os.getcwd()}]')
 import sys
 sys.path.append('.')
 
-from model import GhostNetV2P3_RFB_CAN_REB as USE_MODEL
+from model import GhostNetV2P3_RFB_RFPEM as USE_MODEL
 from model import CrowdDataset, CrowdDataset_p2
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=300)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=2e-5)
     parser.add_argument('--amp', action='store_true', default=False)
     parser.add_argument('--wandb', action='store_true', default=True)
     parser.add_argument('--online', action='store_true', default=False)
@@ -50,9 +50,9 @@ def main(args):
     if torch.cuda.is_available() is False:
         raise EnvironmentError("not find GPU device for training.")
     # ===================== DataPath =========================
-    datatype = 'ShanghaiTech_part_A'
+    # datatype = 'ShanghaiTech_part_A'
     # datatype = 'ShanghaiTech_part_B'
-    # datatype = 'VisDrone2020-CC'
+    datatype = 'VisDrone2020-CC'
     # datatype = 'VisDrone'
     if datatype == 'ShanghaiTech_part_A':
         train_image_root = 'data/shanghaitech/ShanghaiTech/part_A/train_data/images'
@@ -394,7 +394,7 @@ def train_one_epoch_single_gpu_p2loc_rhc(model,
                     gt_count = gt_count / (gt_count + 1)
                     loss_hc_p3 = criterion(et_count, gt_count)
                 elif hcmode == 1:
-                    y2 = 0
+                    y2 = 1e-3
                     y3 = 1e-3
                     loss_hc_p2 = y * y2 * criterion(et_count_p2, gt_count_p2)
                     loss_hc_p3 = y3 * criterion(et_count, gt_count)

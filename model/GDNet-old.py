@@ -213,6 +213,63 @@ class BasicSepConv(nn.Module):
             x = self.relu(x)
         return x
 
+
+class RFB(nn.Module):
+
+    def __init__(self, in_planes, out_planes, stride=1, scale=0.1):
+        super(RFB, self).__init__()
+        self.scale = scale
+        self.out_channels = out_planes
+        self.inter_planes = in_planes // 4
+
+        self.branch0 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=1, dilation=1, relu=False)
+        )
+        self.branch1 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes, self.inter_planes,
+                      kernel_size=(3, 1), stride=1, padding=(1, 0)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=3, dilation=3, relu=False)
+        )
+        self.branch2 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes, self.inter_planes,
+                      kernel_size=(1, 3), stride=stride, padding=(0, 1)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=3, dilation=3, relu=False)
+        )
+        self.branch3 = nn.Sequential(
+            BasicConv(in_planes, self.inter_planes //
+                      2, kernel_size=1, stride=1),
+            BasicConv(self.inter_planes//2, (self.inter_planes//4)*3,
+                      kernel_size=(1, 3), stride=1, padding=(0, 1)),
+            BasicConv((self.inter_planes//4)*3, self.inter_planes,
+                      kernel_size=(3, 1), stride=stride, padding=(1, 0)),
+            BasicSepConv(self.inter_planes, kernel_size=3,
+                         stride=1, padding=5, dilation=5, relu=False)
+        )
+
+        self.ConvLinear = BasicConv(
+            4*self.inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
+        self.relu = nn.ReLU(inplace=False)
+
+    def forward(self, x):
+        x0 = self.branch0(x)
+        x1 = self.branch1(x)
+        x2 = self.branch2(x)
+        x3 = self.branch3(x)
+
+        out = torch.cat((x0, x1, x2, x3), 1)
+        out = self.ConvLinear(out)
+        out = out*self.scale + x
+        out = self.relu(out)
+
+        return out
+
+
 class OCRFB(nn.Module):
 
     def __init__(self, in_planes, out_planes, stride=1, scale=0.1, gamma=False):
@@ -220,7 +277,7 @@ class OCRFB(nn.Module):
         self.scale = nn.Parameter(torch.ones(1) * scale) if gamma else scale
         self.out_channels = out_planes
         self.inter_planes = in_planes // 4
-        self.use_att=True
+
         self.branch0 = nn.Sequential(
             BasicConv(in_planes, self.inter_planes, kernel_size=1, stride=1),
             BasicSepConv(self.inter_planes, kernel_size=3,
@@ -272,46 +329,26 @@ class OCRFB(nn.Module):
             BasicConv((self.inter_planes//4)*3, self.inter_planes,
                       kernel_size=(5, 1), stride=stride, padding=(2, 0)),
             BasicSepConv(self.inter_planes, kernel_size=3,
-                         stride=1, padding=7, dilation=7, relu=False)
+                         stride=1, padding=5, dilation=5, relu=False)
         )
         self.ConvLinear = BasicConv(
             7*self.inter_planes, out_planes, kernel_size=1, stride=1, relu=False)
         self.relu = nn.ReLU(inplace=False)
 
-        if self.use_att:
-            self.att0 = nn.Sequential(BasicConv(self.inter_planes, 1, 1, relu=False), nn.Sigmoid())
-            self.att1 = nn.Sequential(BasicConv(self.inter_planes, 1, 1, relu=False), nn.Sigmoid())
-            self.att2 = nn.Sequential(BasicConv(self.inter_planes, 1, 1, relu=False), nn.Sigmoid())
-            self.att3 = nn.Sequential(BasicConv(self.inter_planes, 1, 1, relu=False), nn.Sigmoid())
-            self.att4 = nn.Sequential(BasicConv(self.inter_planes, 1, 1, relu=False), nn.Sigmoid())
-            self.att5 = nn.Sequential(BasicConv(self.inter_planes, 1, 1, relu=False), nn.Sigmoid())
-            self.att6 = nn.Sequential(BasicConv(self.inter_planes, 1, 1, relu=False), nn.Sigmoid())
-        
     def forward(self, x):
         x0 = self.branch0(x)
         x1 = self.branch1(x)
         x2 = self.branch2(x)
         x3 = self.branch3(x)
-        x4 = self.branch4(x)
-        x5 = self.branch5(x)
+        x4 = self.branch3(x)
+        x5 = self.branch3(x)
         x6 = self.branch6(x)
-        if self.use_att:
-            att0 = x0 * self.att0(x0)
-            att1 = x1 * self.att1(x1)
-            att2 = x2 * self.att2(x2)
-            att3 = x3 * self.att3(x3)
-            att4 = x4 * self.att4(x4)
-            att5 = x5 * self.att5(x5)
-            att6 = x6 * self.att6(x6)
-            out = torch.cat((att0, att1, att2, att3, att4, att5, att6), 1)
-            out = self.ConvLinear(out)
-            out = out*self.scale + x
-            out = self.relu(out)
-        else:
-            out = torch.cat((x0, x1, x2, x3, x4, x5, x6), 1)
-            out = self.ConvLinear(out)
-            out = out*self.scale + x
-            out = self.relu(out)
+        
+        out = torch.cat((x0, x1, x2, x3, x4, x5, x6), 1)
+        out = self.ConvLinear(out)
+        out = out*self.scale + x
+        out = self.relu(out)
+
         return out
 
 class FEM(nn.Module):
@@ -411,8 +448,7 @@ class Bottleneck(nn.Module):
                     padding=dilation,
                     dilation=dilation,
                     bias=False),
-                build_norm_layer(norm_cfg, mid_channels)[1],
-                nn.ReLU(inplace=True)
+                build_norm_layer(norm_cfg, mid_channels)[1]
             )
 
         elif use_dcn_mode == 2:
@@ -633,10 +669,10 @@ class ContextualModule(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
-class GhostNetV2P3_RFB_RFPEM(nn.Module):
-    def __init__(self, mode='train', FEM_kernel_size=1, use_dilation_in_FEM=False, use_CAN=True, use_se=True, use_dcn_mode=0, gamma=False, width=1.0, block=GhostBottleneckV2, args=None):
-        super(GhostNetV2P3_RFB_RFPEM, self).__init__()
-        self.mode = mode
+class GhostNetV2P3_RFB_CAN_REB(nn.Module):
+    def __init__(self, FEM_kernel_size=1, use_dilation_in_FEM=False, use_CAN=True, use_se=True, use_dcn_mode=0, gamma=False, width=1.0, block=GhostBottleneckV2, args=None):
+        super(GhostNetV2P3_RFB_CAN_REB, self).__init__()
+
         self.cfgs = [
             # k, t, c, SE, s
             # ====== p1 ==============
@@ -708,9 +744,9 @@ class GhostNetV2P3_RFB_RFPEM(nn.Module):
         self.P4_RFB = OCRFB(in_planes=_make_divisible(
             160 * width, 4), out_planes=_make_divisible(160 * width, 4), scale=1.0, gamma=gamma)
         self.P2_REB_out = REB(in_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(
-            24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[1, 3, 5, 7, 9], use_dcn_mode=use_dcn_mode)
+            24 * width, 4), block_mid_channels=_make_divisible(16 * width, 4), num_residual_blocks=4, block_dilations=[8, 6, 4, 2], use_dcn_mode=use_dcn_mode)
         self.P3_REB_out = REB(_make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), out_channels=_make_divisible(
-            112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(80 * width, 4), num_residual_blocks=4, block_dilations=[1, 3, 5, 7, 9], use_dcn_mode=use_dcn_mode)
+            112 * width, 4) + _make_divisible(40 * width, 4), block_mid_channels=_make_divisible(40 * width, 4), num_residual_blocks=4, block_dilations=[2, 4, 6, 8], use_dcn_mode=use_dcn_mode)
         # building last layer
         self.P2_FEM = FEM(in_channels=_make_divisible(24 * width, 4) + _make_divisible(112 * width, 4) + _make_divisible(40 * width, 4), in_as_mid=True,
                           mid_channels=_make_divisible(24 * width, 4), out_channels=_make_divisible(24 * width, 4), kernel_size=FEM_kernel_size, use_dilation=use_dilation_in_FEM)
@@ -724,73 +760,45 @@ class GhostNetV2P3_RFB_RFPEM(nn.Module):
             _make_divisible(24 * width, 4), 1, kernel_size=1, norm_cfg=dict(type='BN', requires_grad=True))
 
     def forward(self, x):
-        if self.mode == 'train':
-            x = self.conv_stem(x)
-            x = self.bn1(x)
-            x = self.act1(x)
-            feat = []
-            for i, block in enumerate(self.blocks):
-                x = block(x)
-                if i in [2, 6, 8]:
-                    feat.append(x)
-            p2 = self.P2_RFB(feat[0])
-            if self.use_CAN:
-                p3 = self.ContextualModule(self.P3_RFB(feat[1]))
-            else:
-                p3 = self.P3_RFB(feat[1])
-            p4 = self.P4_RFB(feat[2])
+        x = self.conv_stem(x)
+        x = self.bn1(x)
+        x = self.act1(x)
+        feat = []
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            if i in [2, 6, 8]:
+                feat.append(x)
+        p2 = self.P2_RFB(feat[0])
+        if self.use_CAN:
+            p3 = self.ContextualModule(self.P3_RFB(feat[1]))
+        else:
+            p3 = self.P3_RFB(feat[1])
+        p4 = self.P4_RFB(feat[2])
 
-            p4 = self.P4_FEM(p4)
-            p4_up = F.interpolate(
-                p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
+        p4 = self.P4_FEM(p4)
+        p4_up = F.interpolate(
+            p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
 
-            p3 = self.P3_FEM(torch.cat([p3, p4_up], dim=1))
-            p3_up = F.interpolate(
-                p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
+        p3 = self.P3_FEM(torch.cat([p3, p4_up], dim=1))
+        p3_up = F.interpolate(
+            p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
 
-            p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
+        p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
 
-            p2_out = self.output_layer_p2(self.P2_REB_out(p2))
-            p3_out = self.output_layer_p3(self.P3_REB_out(p3))
+        p2_out = self.output_layer_p2(self.P2_REB_out(p2))
+        p3_out = self.output_layer_p3(self.P3_REB_out(p3))
 
-            return p3_out, p2_out
-        elif self.mode =='test':
-            x = self.conv_stem(x)
-            x = self.bn1(x)
-            x = self.act1(x)
-            feat = []
-            for i, block in enumerate(self.blocks):
-                x = block(x)
-                if i in [6, 8]:
-                    feat.append(x)
-            # p2 = self.P2_RFB(feat[0])
-            p3 = self.P3_RFB(feat[0])
-            p4 = self.P4_RFB(feat[1])
+        return p3_out, p2_out
 
-            p4 = self.P4_FEM(p4)
-            p4_up = F.interpolate(
-                p4, size=(p3.shape[2], p3.shape[3]), mode='bilinear', align_corners=True)
-
-            p3 = self.P3_FEM(torch.cat([p3, p4_up], dim=1))
-            # p3_up = F.interpolate(
-            #     p3, size=(p2.shape[2], p2.shape[3]), mode='bilinear', align_corners=True)
-
-            # p2 = self.P2_FEM(torch.cat([p2, p3_up], dim=1))
-
-            # p2_out = self.output_layer_p2(self.P2_REB_out(p2))
-            p3_out = self.output_layer_p3(self.P3_REB_out(p3))
-
-            return p3_out
-            
 
 if __name__ == '__main__':
-    model = GhostNetV2P3_RFB_RFPEM(mode='test',
-        use_dilation_in_FEM=False, use_CAN=False, use_se=True, use_dcn_mode=1, width=1.0).to('cuda')
+    model = GhostNetV2P3_RFB_CAN_REB(
+        use_dilation_in_FEM=False, use_CAN=True, use_se=True, use_dcn_mode=4, width=1.6).to('cuda')
     # model = GhostNetV2P3_RFB(use_dilation=False, width=1.6).to('cuda')
     # checkpoint_path = '/home/gp.sc.cc.tohoku.ac.jp/duanct/openmmlab/GhostDensNet/checkpoints/ghostnetv2_torch/ck_ghostnetv2_16.pth.tar'
     # load_checkpoint(model, checkpoint_path, strict=False, map_location='cuda')
     model.eval()
-    input = torch.ones((1, 3, 1024, 768)).to('cuda')
+    input = torch.ones((1, 3, 1920, 1080)).to('cuda')
     # p3_out, p2_out = model(input)
     # print(p3_out.shape)
     # print(p2_out.shape)
@@ -801,4 +809,3 @@ if __name__ == '__main__':
     flops = FlopCountAnalysis(model, input)
     print(f'input shape: {input.shape}')
     print(flop_count_table(flops))
-    print("FLOPs: ", flops.total())
